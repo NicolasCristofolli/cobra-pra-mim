@@ -1,0 +1,30 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+}
+
+body {
+  /* Superfície branca + texto verde-escuro da marca. */
+  @apply bg-white font-sans text-sand-900 antialiased;
+}
+
+/* Números de dinheiro alinham em colunas (tabular) em todo o app. */
+.money {
+  font-variant-numeric: tabular-nums;
+}
+
+::selection {
+  @apply bg-leaf-200 text-sand-900;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  @apply rounded-lg bg-sand-300;
+}

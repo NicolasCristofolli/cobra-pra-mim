@@ -1,0 +1,46 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: cobra-db
+    environment:
+      POSTGRES_USER: cobra
+      POSTGRES_PASSWORD: cobra
+      POSTGRES_DB: cobra
+      POSTGRES_HOST_AUTH_METHOD: trust
+    ports:
+      - "5435:5432"
+    volumes:
+      - cobra_pgdata:/var/lib/postgresql/data
+      - ./docker/initdb:/docker-entrypoint-initdb.d:ro
+
+  # Evolution API v2 — provedor único de WhatsApp do sistema.
+  # Porta padrão 8080; a API key abaixo é a mesma colada nas Configurações.
+  evolution:
+    image: atendai/evolution-api:v2.1.1
+    container_name: cobra-evolution
+    ports:
+      - "8080:8080"
+    environment:
+      AUTHENTICATION_API_KEY: ${EVOLUTION_API_KEY:-cobra-evolution-local-key}
+      DATABASE_ENABLED: "true"
+      DATABASE_PROVIDER: postgresql
+      DATABASE_CONNECTION_URI: postgresql://cobra:cobra@db:5432/evolution
+      DATABASE_CONNECTION_CLIENT_NAME: evolution
+      CACHE_REDIS_ENABLED: "false"
+      CACHE_LOCAL_ENABLED: "true"
+      # Versão do cliente WhatsApp Web anunciada no handshake. A versão embutida
+      # na imagem v2.1.1 ficou obsoleta e o WhatsApp recusa a conexão em silêncio
+      # (instância presa em "connecting", QR nunca gerado). Se o QR parar de sair
+      # de novo, atualize com o valor de:
+      # https://raw.githubusercontent.com/WhiskeySockets/Baileys/master/src/Defaults/baileys-version.json
+      CONFIG_SESSION_PHONE_VERSION: 2.3000.1035194821
+    depends_on:
+      - db
+    volumes:
+      - evolution_instances:/evolution/instances
+
+volumes:
+  cobra_pgdata:
+  evolution_instances:
