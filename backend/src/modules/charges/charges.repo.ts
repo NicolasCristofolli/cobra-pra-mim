@@ -222,6 +222,30 @@ export async function cancelCharge(
 }
 
 /**
+ * Reverte um cancelamento (botão "Reativar"). Só permitido para faturas
+ * CANCELED de um cliente que ainda existe e não está excluído (soft delete)
+ * — não há como reativar a fatura de um cliente excluído/inexistente (nada
+ * para cobrar; se o cliente foi excluído, primeiro é preciso restaurá-lo).
+ * O novo status reflete se o vencimento já passou, igual ao critério usado
+ * por markOverdue().
+ */
+export async function reactivateCharge(
+  userId: string,
+  chargeId: string
+): Promise<ChargeRow | null> {
+  return queryOne<ChargeRow>(
+    `UPDATE charges
+        SET status = CASE WHEN due_date < CURRENT_DATE THEN 'OVERDUE'::charge_status
+                           ELSE 'PENDING'::charge_status END,
+            updated_at = now()
+      WHERE user_id = $1 AND id = $2 AND status = 'CANCELED'
+        AND client_id IN (SELECT id FROM clients WHERE user_id = $1 AND deleted_at IS NULL)
+      RETURNING *`,
+    [userId, chargeId]
+  );
+}
+
+/**
  * Exclui DEFINITIVAMENTE uma fatura. Permitido apenas para faturas canceladas
  * ou órfãs (cliente excluído) — o histórico financeiro vivo nunca é apagado.
  * Devolve null se a fatura não se qualificar.

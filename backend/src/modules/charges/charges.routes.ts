@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { queryOne } from '../../db';
 import { asyncHandler, AppError, notFound } from '../../lib/errors';
+import { todayISO } from '../../lib/dates';
 import { requireAuth } from '../../middleware/auth';
 import { publish } from '../../lib/events';
 import { notifyChargeNow, sendPaymentConfirmation } from '../../services/billing-engine';
@@ -13,6 +14,7 @@ import {
   findChargeById,
   listCharges,
   markChargePaid,
+  reactivateCharge,
   serializeCharge,
   updateCharge,
   type ChargeStatus
@@ -33,6 +35,13 @@ const createSchema = z
       .nullish()
   })
   .superRefine((data, ctx) => {
+    if (data.dueDate < todayISO()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['dueDate'],
+        message: 'A data de vencimento não pode ser retroativa'
+      });
+    }
     // Semanal/mensal exigem data limite; anual pode rodar sem limite.
     if (
       (data.recurrence === 'WEEKLY' || data.recurrence === 'MONTHLY') &&
@@ -99,8 +108,10 @@ export default function chargesRouter(deps: AppDeps): Router {
 
       // O cliente precisa existir E pertencer ao tenant logado — impede que
       // um usuário crie cobranças "em nome" de clientes de outra conta.
+      // deleted_at IS NULL: cliente excluído (soft delete) não recebe cobrança
+      // nova — é preciso restaurá-lo primeiro (botão "Desfazer").
       const client = await queryOne<{ id: string }>(
-        'SELECT id FROM clients WHERE id = $2 AND user_id = $1',
+        'SELECT id FROM clients WHERE id = $2 AND user_id = $1 AND deleted_at IS NULL',
         [req.userId, data.clientId]
       );
       if (!client) throw notFound('Cliente não encontrado');
@@ -189,6 +200,20 @@ export default function chargesRouter(deps: AppDeps): Router {
       const updated = await cancelCharge(req.userId, id);
       if (!updated) {
         throw new AppError('Só é possível cancelar faturas pendentes ou atrasadas', 409);
+      }
+      res.json(serializeCharge(updated));
+    })
+  );
+
+  // Botão "Reativar" — desfaz um cancelamento (o próprio ou o automático
+  // disparado ao excluir o cliente, via undo do toast).
+  router.post(
+    '/:id/reactivate',
+    asyncHandler(async (req, res) => {
+      const { id } = idParam.parse(req.params);
+      const updated = await reactivateCharge(req.userId, id);
+      if (!updated) {
+        throw new AppError('Só é possível reativar faturas canceladas', 409);
       }
       res.json(serializeCharge(updated));
     })

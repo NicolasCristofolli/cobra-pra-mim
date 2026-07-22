@@ -88,7 +88,16 @@ export async function ensureInstance(userId: string): Promise<void> {
   });
   // 403 = nome já em uso (corrida benigna entre duas chamadas do mesmo usuário)
   if (status >= 400 && status !== 403) {
-    throw new AppError('Não foi possível criar a instância de WhatsApp', 502);
+    // Causa comum: o container da Evolution não conseguiu falar com o
+    // próprio banco Postgres (ver docker/initdb/02-create-evolution-db.sql —
+    // só roda na primeira inicialização do volume; um volume reaproveitado
+    // de antes desse script pode não ter o banco "evolution" criado).
+    throw new AppError(
+      'Não foi possível criar a instância de WhatsApp. Verifique os logs do container ' +
+        '"evolution" (docker compose logs evolution) — uma causa comum é o banco ' +
+        'Postgres "evolution" não existir ainda no volume atual.',
+      502
+    );
   }
 }
 

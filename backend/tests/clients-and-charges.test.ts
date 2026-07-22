@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import request from 'supertest';
+import { addDaysISO, todayISO } from '../src/lib/dates';
 import {
   buildTestApp,
   createUser,
@@ -8,34 +9,73 @@ import {
   type TestHarness
 } from './helpers';
 
-describe('clientes e cobranças — identidades duplicadas e isolamento multi-tenant', () => {
+describe('clientes e cobranças — duplicidade, datas e isolamento multi-tenant', () => {
   let harness: TestHarness;
+  const today = todayISO();
 
   beforeEach(async () => {
     await truncateAll();
     harness = buildTestApp();
   });
 
-  it('permite DOIS clientes com o MESMO nome e MESMO telefone (UUIDs distintos)', async () => {
+  it('bloqueia telefone/e-mail/CPF-CNPJ duplicados para o MESMO usuário, mas permite entre usuários diferentes', async () => {
     const user = await createUser();
     const agent = await loginAgent(harness.app, user);
 
-    const payload = { name: 'Maria Souza', phone: '51999998888', document: '390.533.447-05' };
-    const first = await agent.post('/clients').send(payload);
-    const second = await agent.post('/clients').send(payload);
-
+    const base = {
+      name: 'Maria Souza',
+      phone: '51999998888',
+      email: 'maria@teste.com',
+      document: '390.533.447-05'
+    };
+    const first = await agent.post('/clients').send(base);
     expect(first.status).toBe(201);
-    expect(second.status).toBe(201);
-    expect(first.body.id).not.toBe(second.body.id);
     // Telefone normalizado com DDI 55.
     expect(first.body.phone).toBe('5551999998888');
 
-    const list = await agent.get('/clients');
-    const marias = list.body.filter((c: { name: string }) => c.name === 'Maria Souza');
-    expect(marias).toHaveLength(2);
+    const samePhone = await agent
+      .post('/clients')
+      .send({ ...base, name: 'Outra Maria', email: 'outra@teste.com', document: '11222333000181' });
+    expect(samePhone.status).toBe(409);
+
+    const sameEmail = await agent
+      .post('/clients')
+      .send({ ...base, phone: '51999997777', document: '11222333000181' });
+    expect(sameEmail.status).toBe(409);
+
+    const sameDocument = await agent
+      .post('/clients')
+      .send({ ...base, phone: '51999996666', email: 'outra2@teste.com' });
+    expect(sameDocument.status).toBe(409);
+
+    // Outro usuário pode usar os mesmos dados — a unicidade é escopada por usuário.
+    const otherUser = await createUser();
+    const otherAgent = await loginAgent(harness.app, otherUser);
+    const acrossTenants = await otherAgent.post('/clients').send(base);
+    expect(acrossTenants.status).toBe(201);
   });
 
-  it('cria DUAS cobranças para o mesmo cliente (mesmo nome/telefone) sem conflito', async () => {
+  it('rejeita CPF/CNPJ inválido (dígito verificador) e placeholders tipo "000..."', async () => {
+    const user = await createUser();
+    const agent = await loginAgent(harness.app, user);
+
+    const zeros = await agent
+      .post('/clients')
+      .send({ name: 'Fake', phone: '51999995555', document: '000.000.000-00' });
+    expect(zeros.status).toBe(400);
+
+    const badChecksum = await agent
+      .post('/clients')
+      .send({ name: 'Fake 2', phone: '51999994444', document: '123.456.789-00' });
+    expect(badChecksum.status).toBe(400);
+
+    const valid = await agent
+      .post('/clients')
+      .send({ name: 'Real', phone: '51999993333', document: '390.533.447-05' });
+    expect(valid.status).toBe(201);
+  });
+
+  it('cria DUAS cobranças para o mesmo cliente sem conflito', async () => {
     const user = await createUser();
     const agent = await loginAgent(harness.app, user);
 
@@ -48,14 +88,14 @@ describe('clientes e cobranças — identidades duplicadas e isolamento multi-te
       clientId: client.body.id,
       description: 'Serviço A',
       amountCents: 10000,
-      dueDate: '2026-07-10',
+      dueDate: addDaysISO(today, 5),
       recurrence: 'NONE'
     });
     const chargeB = await agent.post('/charges').send({
       clientId: client.body.id,
       description: 'Serviço B',
       amountCents: 20000,
-      dueDate: '2026-07-20',
+      dueDate: addDaysISO(today, 15),
       recurrence: 'NONE'
     });
 
@@ -67,7 +107,34 @@ describe('clientes e cobranças — identidades duplicadas e isolamento multi-te
     expect(list.body.total).toBe(2);
   });
 
-  it('clientes DIFERENTES podem compartilhar o mesmo telefone, cada um com suas faturas', async () => {
+  it('recusa criar cobrança com vencimento retroativo', async () => {
+    const user = await createUser();
+    const agent = await loginAgent(harness.app, user);
+
+    const client = await agent
+      .post('/clients')
+      .send({ name: 'Cliente Data', phone: '51988886666', document: '39053344705' });
+
+    const rejected = await agent.post('/charges').send({
+      clientId: client.body.id,
+      description: 'Retroativa',
+      amountCents: 1000,
+      dueDate: addDaysISO(today, -1),
+      recurrence: 'NONE'
+    });
+    expect(rejected.status).toBe(400);
+
+    const acceptedToday = await agent.post('/charges').send({
+      clientId: client.body.id,
+      description: 'Vence hoje',
+      amountCents: 1000,
+      dueDate: today,
+      recurrence: 'NONE'
+    });
+    expect(acceptedToday.status).toBe(201);
+  });
+
+  it('dois clientes distintos do mesmo usuário têm faturas independentes', async () => {
     const user = await createUser();
     const agent = await loginAgent(harness.app, user);
 
@@ -76,7 +143,7 @@ describe('clientes e cobranças — identidades duplicadas e isolamento multi-te
       .send({ name: 'Academia Corpo em Forma', phone: '51977776666', document: '11222333000181' });
     const socio = await agent
       .post('/clients')
-      .send({ name: 'Pedro Alves', phone: '51977776666', document: '39053344705' });
+      .send({ name: 'Pedro Alves', phone: '51977775555', document: '39053344705' });
 
     expect(academia.status).toBe(201);
     expect(socio.status).toBe(201);
@@ -86,9 +153,9 @@ describe('clientes e cobranças — identidades duplicadas e isolamento multi-te
         clientId: target,
         description: 'Mensalidade',
         amountCents: 9900,
-        dueDate: '2026-08-01',
+        dueDate: addDaysISO(today, 10),
         recurrence: 'MONTHLY',
-        recurrenceEndDate: '2027-08-31'
+        recurrenceEndDate: addDaysISO(today, 400)
       });
       expect(response.status).toBe(201);
     }
@@ -144,7 +211,7 @@ describe('clientes e cobranças — identidades duplicadas e isolamento multi-te
       clientId: created.body.id,
       description: 'Invasão',
       amountCents: 100,
-      dueDate: '2026-07-15',
+      dueDate: addDaysISO(today, 5),
       recurrence: 'NONE'
     });
     expect(attempt.status).toBe(404);
@@ -162,14 +229,14 @@ describe('clientes e cobranças — identidades duplicadas e isolamento multi-te
       clientId: client.body.id,
       description: 'Fatura em aberto',
       amountCents: 5000,
-      dueDate: '2026-07-30',
+      dueDate: addDaysISO(today, 8),
       recurrence: 'NONE'
     });
     const paid = await agent.post('/charges').send({
       clientId: client.body.id,
       description: 'Fatura já paga',
       amountCents: 8000,
-      dueDate: '2026-07-01',
+      dueDate: today,
       recurrence: 'NONE'
     });
     await agent.post(`/charges/${paid.body.id}/pay`);
@@ -177,8 +244,9 @@ describe('clientes e cobranças — identidades duplicadas e isolamento multi-te
     const deletion = await agent.delete(`/clients/${client.body.id}`);
     expect(deletion.status).toBe(200);
     expect(deletion.body.canceledCharges).toBe(1);
+    expect(deletion.body.canceledChargeIds).toEqual([pending.body.id]);
 
-    // Cliente sumiu; faturas ficam no histórico, desvinculadas (clientId null).
+    // Cliente some das listagens (soft delete).
     expect((await agent.get(`/clients/${client.body.id}`)).status).toBe(404);
     const list = await agent.get('/charges');
     expect(list.body.total).toBe(2);
@@ -188,8 +256,63 @@ describe('clientes e cobranças — identidades duplicadas e isolamento multi-te
         c
       ])
     );
-    expect(byId.get(pending.body.id)).toMatchObject({ status: 'CANCELED', clientId: null });
-    expect(byId.get(paid.body.id)).toMatchObject({ status: 'PAID', clientId: null });
+    expect(byId.get(pending.body.id)).toMatchObject({ status: 'CANCELED' });
+    expect(byId.get(paid.body.id)).toMatchObject({ status: 'PAID' });
+  });
+
+  it('desfaz a exclusão do cliente (restore) e reativa a fatura auto-cancelada', async () => {
+    const user = await createUser();
+    const agent = await loginAgent(harness.app, user);
+
+    const client = await agent
+      .post('/clients')
+      .send({ name: 'Reversível', phone: '51944442222', document: '39053344705' });
+    const pending = await agent.post('/charges').send({
+      clientId: client.body.id,
+      description: 'Fatura em aberto',
+      amountCents: 5000,
+      dueDate: addDaysISO(today, 8),
+      recurrence: 'NONE'
+    });
+
+    const deletion = await agent.delete(`/clients/${client.body.id}`);
+    expect(deletion.body.canceledChargeIds).toEqual([pending.body.id]);
+
+    const restore = await agent.post(`/clients/${client.body.id}/restore`);
+    expect(restore.status).toBe(200);
+    expect((await agent.get(`/clients/${client.body.id}`)).status).toBe(200);
+
+    const reactivate = await agent.post(`/charges/${pending.body.id}/reactivate`);
+    expect(reactivate.status).toBe(200);
+    expect(reactivate.body.status).toBe('PENDING');
+  });
+
+  it('cancela e reativa uma cobrança (botão "Reativar")', async () => {
+    const user = await createUser();
+    const agent = await loginAgent(harness.app, user);
+
+    const client = await agent
+      .post('/clients')
+      .send({ name: 'Cobrança Reversível', phone: '51944441111', document: '39053344705' });
+    const charge = await agent.post('/charges').send({
+      clientId: client.body.id,
+      description: 'Serviço',
+      amountCents: 5000,
+      dueDate: addDaysISO(today, 8),
+      recurrence: 'NONE'
+    });
+
+    const canceled = await agent.post(`/charges/${charge.body.id}/cancel`);
+    expect(canceled.status).toBe(200);
+    expect(canceled.body.status).toBe('CANCELED');
+
+    const reactivated = await agent.post(`/charges/${charge.body.id}/reactivate`);
+    expect(reactivated.status).toBe(200);
+    expect(reactivated.body.status).toBe('PENDING');
+
+    // Já não está mais cancelada — reativar de novo é 409.
+    const alreadyActive = await agent.post(`/charges/${charge.body.id}/reactivate`);
+    expect(alreadyActive.status).toBe(409);
   });
 
   it('edita cobrança PENDING (descrição, valor e vencimento) e recusa editar paga', async () => {
@@ -203,20 +326,19 @@ describe('clientes e cobranças — identidades duplicadas e isolamento multi-te
       clientId: client.body.id,
       description: 'Original',
       amountCents: 1000,
-      dueDate: '2026-08-10',
+      dueDate: addDaysISO(today, 20),
       recurrence: 'NONE'
     });
 
     const updated = await agent.put(`/charges/${charge.body.id}`).send({
       description: 'Corrigida',
       amountCents: 2500,
-      dueDate: '2026-08-20'
+      dueDate: addDaysISO(today, 30)
     });
     expect(updated.status).toBe(200);
     expect(updated.body).toMatchObject({
       description: 'Corrigida',
       amountCents: 2500,
-      dueDate: '2026-08-20',
       status: 'PENDING'
     });
 
@@ -224,7 +346,7 @@ describe('clientes e cobranças — identidades duplicadas e isolamento multi-te
     const blocked = await agent.put(`/charges/${charge.body.id}`).send({
       description: 'Tarde demais',
       amountCents: 1,
-      dueDate: '2026-09-01'
+      dueDate: addDaysISO(today, 45)
     });
     expect(blocked.status).toBe(409);
   });
@@ -240,7 +362,7 @@ describe('clientes e cobranças — identidades duplicadas e isolamento multi-te
       clientId: client.body.id,
       description: 'Mensalidade sem fim',
       amountCents: 9900,
-      dueDate: '2026-08-01',
+      dueDate: addDaysISO(today, 10),
       recurrence: 'MONTHLY'
     });
     expect(rejected.status).toBe(400);
@@ -250,7 +372,7 @@ describe('clientes e cobranças — identidades duplicadas e isolamento multi-te
       clientId: client.body.id,
       description: 'Anuidade',
       amountCents: 50000,
-      dueDate: '2026-08-01',
+      dueDate: addDaysISO(today, 10),
       recurrence: 'YEARLY'
     });
     expect(yearly.status).toBe(201);

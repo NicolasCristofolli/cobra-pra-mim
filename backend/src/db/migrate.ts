@@ -3,8 +3,6 @@ import path from 'node:path';
 import { Client } from 'pg'; // Mudamos de Pool para Client direto
 
 export async function runMigrations(): Promise<string[]> {
-  console.log("=== URL QUE O BACKEND ESTÁ USANDO ===", process.env.DATABASE_URL);
-
   // Criamos um cliente direto configurando timeouts e forçando IPv4 puro
   const client = new Client({
     connectionString: process.env.DATABASE_URL,

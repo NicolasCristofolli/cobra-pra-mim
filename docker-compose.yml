@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   db:
     image: postgres:16-alpine
@@ -18,7 +16,7 @@ services:
   # Evolution API v2 — provedor único de WhatsApp do sistema.
   # Porta padrão 8080; a API key abaixo é a mesma colada nas Configurações.
   evolution:
-    image: atendai/evolution-api:v2.1.1
+    image: evoapicloud/evolution-api:v2.1.1
     container_name: cobra-evolution
     ports:
       - "8080:8080"

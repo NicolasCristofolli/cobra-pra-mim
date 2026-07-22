@@ -8,6 +8,7 @@ import {
   Copy,
   Pencil,
   Plus,
+  RotateCcw,
   ScrollText,
   Search,
   Send,
@@ -258,7 +259,7 @@ function CobrancasContent() {
 
   async function action(
     charge: Charge,
-    kind: 'pay' | 'notify',
+    kind: 'pay' | 'notify' | 'reactivate',
     successMessage: string
   ) {
     setActingId(charge.id);
@@ -439,6 +440,9 @@ function CobrancasContent() {
                   // Excluível: fatura cancelada ou órfã (cliente excluído).
                   const deletable =
                     charge.status === 'CANCELED' || charge.clientId === null;
+                  // Reativável: cancelada, e o cliente ainda existe (não foi excluído).
+                  const reactivatable =
+                    charge.status === 'CANCELED' && charge.clientId !== null;
                   const busy = actingId === charge.id;
                   return (
                     <tr
@@ -546,6 +550,16 @@ function CobrancasContent() {
                                 <Ban className="h-4 w-4" />
                               </IconButton>
                             </>
+                          )}
+                          {reactivatable && (
+                            <IconButton
+                              onClick={() => action(charge, 'reactivate', 'Cobrança reativada.')}
+                              disabled={busy}
+                              title="Reativar cobrança"
+                              className="hover:bg-leaf-50 hover:text-leaf-700"
+                            >
+                              <RotateCcw className="h-4 w-4" />
+                            </IconButton>
                           )}
                           {deletable && (
                             <IconButton
@@ -678,6 +692,7 @@ function CobrancasContent() {
               <Input
                 type="date"
                 value={dueDate}
+                min={todayInput()}
                 onChange={(event) => setDueDate(event.target.value)}
                 required
               />

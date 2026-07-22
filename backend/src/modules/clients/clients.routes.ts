@@ -1,8 +1,8 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { query, queryOne, withTransaction } from '../../db';
-import { asyncHandler, notFound } from '../../lib/errors';
-import { normalizePhone } from '../../lib/format';
+import { AppError, asyncHandler, notFound } from '../../lib/errors';
+import { isRepeatedDigits, isValidCNPJ, isValidCPF, normalizePhone } from '../../lib/format';
 import { requireAuth } from '../../middleware/auth';
 
 const router = Router();
@@ -14,21 +14,43 @@ const clientSchema = z.object({
     .string()
     .trim()
     .transform(normalizePhone)
-    .refine((digits) => /^[0-9]{8,15}$/.test(digits), 'Telefone inválido'),
+    .refine((digits) => /^[0-9]{8,15}$/.test(digits), 'Telefone inválido')
+    .refine((digits) => !isRepeatedDigits(digits.replace(/^55/, '')), 'Telefone inválido'),
   email: z.string().trim().email('E-mail inválido').nullish().or(z.literal('').transform(() => null)),
   // CPF (11 dígitos) ou CNPJ (14 dígitos) — obrigatório: o gateway precisa
-  // do documento para emitir a cobrança em nome do cliente.
+  // do documento para emitir a cobrança em nome do cliente. Normalizado para
+  // dígitos puros (sem máscara) para a checagem de duplicidade funcionar
+  // independente de como o usuário formatou na digitação.
   document: z
     .string({ required_error: 'Informe o CPF ou CNPJ' })
     .trim()
     .min(1, 'Informe o CPF ou CNPJ')
-    .max(20)
-    .refine((doc) => {
-      const digits = doc.replace(/\D/g, '');
-      return digits.length === 11 || digits.length === 14;
-    }, 'CPF/CNPJ inválido — use 11 (CPF) ou 14 (CNPJ) dígitos'),
+    .transform((doc) => doc.replace(/\D/g, ''))
+    .refine(
+      (digits) => digits.length === 11 || digits.length === 14,
+      'CPF/CNPJ inválido — use 11 (CPF) ou 14 (CNPJ) dígitos'
+    )
+    .refine(
+      (digits) => (digits.length === 11 ? isValidCPF(digits) : isValidCNPJ(digits)),
+      'CPF/CNPJ inválido'
+    ),
   notes: z.string().trim().max(2000).nullish().or(z.literal('').transform(() => null))
 });
+
+const DUPLICATE_FIELD_MESSAGE: Record<string, string> = {
+  clients_user_phone_unique: 'Já existe um cliente com este telefone',
+  clients_user_email_unique: 'Já existe um cliente com este e-mail',
+  clients_user_document_unique: 'Já existe um cliente com este CPF/CNPJ'
+};
+
+/** Traduz violação de índice único (duplicidade) num 409 amigável; repassa outros erros. */
+function rethrowDuplicate(error: unknown): never {
+  const constraint = (error as { constraint?: string }).constraint;
+  if (constraint && DUPLICATE_FIELD_MESSAGE[constraint]) {
+    throw new AppError(DUPLICATE_FIELD_MESSAGE[constraint], 409);
+  }
+  throw error;
+}
 
 const idParam = z.object({ id: z.string().uuid() });
 
@@ -76,7 +98,7 @@ const LIST_SQL = `
          COUNT(ch.id) FILTER (WHERE ch.status = 'PAID')                  AS paid_count
     FROM clients c
     LEFT JOIN charges ch ON ch.client_id = c.id
-   WHERE c.user_id = $1
+   WHERE c.user_id = $1 AND c.deleted_at IS NULL
 `;
 
 router.get(
@@ -120,15 +142,16 @@ router.post(
   '/',
   asyncHandler(async (req, res) => {
     const data = clientSchema.parse(req.body);
-    // Sem verificação de duplicidade de nome/telefone: é REQUISITO permitir
-    // homônimos e números compartilhados. A identidade é o UUID.
+    // Telefone/e-mail/CPF-CNPJ não podem se repetir para o mesmo usuário —
+    // aplicado via índice único parcial (ver migração 006); erro 23505 vira
+    // 409 amigável em rethrowDuplicate.
     const row = await queryOne<ClientRow>(
       `INSERT INTO clients (user_id, name, phone, email, document, notes)
        VALUES ($1, $2, $3, $4, $5, $6)
        RETURNING id, name, phone, email, document, notes, created_at,
                  '0' AS open_count, '0' AS overdue_count, '0' AS paid_count`,
       [req.userId, data.name, data.phone, data.email ?? null, data.document ?? null, data.notes ?? null]
-    );
+    ).catch(rethrowDuplicate);
     res.status(201).json(serialize(row!));
   })
 );
@@ -141,10 +164,10 @@ router.put(
     const updated = await queryOne<{ id: string }>(
       `UPDATE clients
           SET name = $3, phone = $4, email = $5, document = $6, notes = $7
-        WHERE id = $2 AND user_id = $1
+        WHERE id = $2 AND user_id = $1 AND deleted_at IS NULL
         RETURNING id`,
       [req.userId, id, data.name, data.phone, data.email ?? null, data.document ?? null, data.notes ?? null]
-    );
+    ).catch(rethrowDuplicate);
     if (!updated) throw notFound('Cliente não encontrado');
     const row = await queryOne<ClientRow>(`${LIST_SQL} AND c.id = $2 GROUP BY c.id`, [
       req.userId,
@@ -158,13 +181,12 @@ router.delete(
   '/:id',
   asyncHandler(async (req, res) => {
     const { id } = idParam.parse(req.params);
-    // Excluir um cliente NÃO pode estourar 409 por FK: na mesma transação,
-    // as faturas em aberto viram CANCELED e a exclusão desvincula as demais
-    // (client_id → NULL via ON DELETE SET NULL). Faturas PAID permanecem
-    // pagas — o histórico financeiro não é reescrito.
+    // Exclusão é reversível (soft delete): marcamos deleted_at em vez de
+    // apagar a linha, para o botão "Desfazer" poder restaurar o cliente E
+    // as faturas que foram auto-canceladas aqui, na mesma operação.
     const result = await withTransaction(async (tx) => {
       const existing = await tx.query<{ id: string }>(
-        'SELECT id FROM clients WHERE id = $2 AND user_id = $1',
+        'SELECT id FROM clients WHERE id = $2 AND user_id = $1 AND deleted_at IS NULL',
         [req.userId, id]
       );
       if (existing.rowCount === 0) return null;
@@ -176,15 +198,37 @@ router.delete(
           RETURNING id`,
         [req.userId, id]
       );
-      await tx.query('DELETE FROM clients WHERE id = $2 AND user_id = $1', [
-        req.userId,
-        id
-      ]);
-      return { canceledCharges: canceled.rowCount ?? 0 };
+      await tx.query(
+        'UPDATE clients SET deleted_at = now() WHERE id = $2 AND user_id = $1',
+        [req.userId, id]
+      );
+      return { canceledChargeIds: canceled.rows.map((r) => r.id) };
     });
 
     if (!result) throw notFound('Cliente não encontrado');
-    res.json({ ok: true, canceledCharges: result.canceledCharges });
+    res.json({
+      ok: true,
+      canceledCharges: result.canceledChargeIds.length,
+      canceledChargeIds: result.canceledChargeIds
+    });
+  })
+);
+
+// Desfazer a exclusão: usado pela ação "Desfazer" do toast. Faturas
+// auto-canceladas pela exclusão são reativadas separadamente pelo client
+// (POST /charges/:id/reactivate para cada id em canceledChargeIds).
+router.post(
+  '/:id/restore',
+  asyncHandler(async (req, res) => {
+    const { id } = idParam.parse(req.params);
+    const row = await queryOne<{ id: string }>(
+      `UPDATE clients SET deleted_at = NULL
+        WHERE id = $2 AND user_id = $1 AND deleted_at IS NOT NULL
+        RETURNING id`,
+      [req.userId, id]
+    ).catch(rethrowDuplicate);
+    if (!row) throw notFound('Cliente não encontrado ou não estava excluído');
+    res.json({ ok: true });
   })
 );
 

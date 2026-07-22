@@ -23,7 +23,7 @@ import {
   type BadgeVariant
 } from '@/components/ui';
 import { api, ApiError } from '@/lib/api';
-import { formatDateBR, formatPhoneBR } from '@/lib/format';
+import { formatDateBR, formatPhoneBR, isRepeatedDigits, isValidDocument } from '@/lib/format';
 import type { Client, ClientStatus } from '@/lib/types';
 
 interface ClientForm {
@@ -77,6 +77,19 @@ function ClientesContent() {
   const [form, setForm] = useState<ClientForm>(EMPTY_FORM);
   const [formError, setFormError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [docHint, setDocHint] = useState<string | null>(null);
+  const [phoneHint, setPhoneHint] = useState<string | null>(null);
+
+  function validateDocument(value: string) {
+    setDocHint(value.trim() && !isValidDocument(value) ? 'CPF/CNPJ inválido' : null);
+  }
+
+  function validatePhone(value: string) {
+    const digits = value.replace(/\D/g, '');
+    setPhoneHint(
+      digits && isRepeatedDigits(digits) ? 'Telefone inválido' : null
+    );
+  }
 
   const [deleting, setDeleting] = useState<Client | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
@@ -102,6 +115,8 @@ function ClientesContent() {
     setEditing(null);
     setForm(EMPTY_FORM);
     setFormError(null);
+    setDocHint(null);
+    setPhoneHint(null);
     setModalOpen(true);
   }
 
@@ -115,6 +130,8 @@ function ClientesContent() {
       notes: client.notes ?? ''
     });
     setFormError(null);
+    setDocHint(null);
+    setPhoneHint(null);
     setModalOpen(true);
   }
 
@@ -156,21 +173,39 @@ function ClientesContent() {
     }
   }
 
+  async function undoDelete(clientId: string, canceledChargeIds: string[]) {
+    try {
+      await api(`/clients/${clientId}/restore`, { method: 'POST' });
+      await Promise.all(
+        canceledChargeIds.map((chargeId) =>
+          api(`/charges/${chargeId}/reactivate`, { method: 'POST' }).catch(() => undefined)
+        )
+      );
+      push('success', 'Exclusão desfeita.');
+      await load(query);
+    } catch (error) {
+      push('error', (error as Error).message);
+    }
+  }
+
   async function confirmDelete() {
     if (!deleting) return;
     setDeleteLoading(true);
     try {
-      const result = await api<{ ok: boolean; canceledCharges: number }>(
-        `/clients/${deleting.id}`,
-        { method: 'DELETE' }
-      );
+      const result = await api<{
+        ok: boolean;
+        canceledCharges: number;
+        canceledChargeIds: string[];
+      }>(`/clients/${deleting.id}`, { method: 'DELETE' });
+      const clientId = deleting.id;
       push(
         'success',
         result.canceledCharges > 0
           ? `Cliente excluído. ${result.canceledCharges} fatura${
               result.canceledCharges > 1 ? 's' : ''
             } em aberto cancelada${result.canceledCharges > 1 ? 's' : ''}.`
-          : 'Cliente excluído.'
+          : 'Cliente excluído.',
+        { label: 'Desfazer', onClick: () => undoDelete(clientId, result.canceledChargeIds) }
       );
       setDeleting(null);
       await load(query);
@@ -345,10 +380,15 @@ function ClientesContent() {
             />
           </Field>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <Field label="WhatsApp" hint="DDD + número. O DDI 55 é adicionado automaticamente.">
+            <Field
+              label="WhatsApp"
+              hint="DDD + número. O DDI 55 é adicionado automaticamente."
+              error={phoneHint}
+            >
               <Input
                 value={form.phone}
                 onChange={(event) => setForm({ ...form, phone: event.target.value })}
+                onBlur={(event) => validatePhone(event.target.value)}
                 placeholder="(11) 99999-0000"
                 required
               />
@@ -362,10 +402,15 @@ function ClientesContent() {
               />
             </Field>
           </div>
-          <Field label="CPF/CNPJ" hint="Obrigatório — o gateway usa o documento para emitir a cobrança.">
+          <Field
+            label="CPF/CNPJ"
+            hint="Obrigatório — o gateway usa o documento para emitir a cobrança."
+            error={docHint}
+          >
             <Input
               value={form.document}
               onChange={(event) => setForm({ ...form, document: event.target.value })}
+              onBlur={(event) => validateDocument(event.target.value)}
               placeholder="000.000.000-00"
               required
             />

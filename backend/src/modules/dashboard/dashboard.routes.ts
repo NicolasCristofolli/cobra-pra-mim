@@ -42,12 +42,11 @@ router.get(
          COUNT(*) FILTER (WHERE status IN ('PENDING', 'SENT', 'OVERDUE'))                   AS active_count,
          COALESCE(SUM(amount_cents)
                   FILTER (WHERE status IN ('PENDING', 'SENT', 'OVERDUE')), 0)::bigint       AS active_amount,
-         COUNT(*) FILTER (WHERE due_date < $2::date AND status <> 'CANCELED')       AS matured_count,
-         COUNT(*) FILTER (WHERE due_date < $2::date
-                            AND status IN ('PENDING', 'SENT', 'OVERDUE'))                   AS matured_unpaid
+         COUNT(*) FILTER (WHERE status IN ('PAID', 'OVERDUE'))            AS matured_count,
+         COUNT(*) FILTER (WHERE status = 'OVERDUE')                      AS matured_unpaid
        FROM charges
        WHERE user_id = $1`,
-      [req.userId, today]
+      [req.userId]
     );
 
     // MRR: última fatura de cada série recorrente; séries encerradas
@@ -110,7 +109,9 @@ router.get(
       netProfitCents: Number(totals?.net_profit ?? 0),
       activeChargesCount: Number(totals?.active_count ?? 0),
       activeChargesAmountCents: Number(totals?.active_amount ?? 0),
-      // Inadimplência: entre faturas já vencidas, quantas seguem sem pagamento.
+      // Inadimplência: vencidas ÷ (pagas + vencidas). Faturas ainda não vencidas
+      // (PENDING/SENT com due_date futuro) ficam de fora do cálculo — não são
+      // inadimplência, ainda não chegou a hora de pagar.
       defaultRatePercent:
         maturedCount === 0 ? 0 : Number(((maturedUnpaid / maturedCount) * 100).toFixed(1)),
       maturedCount,
