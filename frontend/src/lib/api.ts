@@ -28,7 +28,15 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
   });
 
   if (response.status === 401 && !path.startsWith('/auth/')) {
-    if (typeof window !== 'undefined') window.location.href = '/login';
+    if (typeof window !== 'undefined') {
+      // O cookie é httpOnly — o JS não consegue apagá-lo. Sem chamar /logout
+      // primeiro, ele sobrevive ao redirect e o middleware manda de volta pro
+      // dashboard ao ver o cookie ainda "presente" (mesmo inválido/expirado),
+      // criando um loop infinito entre /login e /dashboard.
+      fetch('/api/auth/logout', { method: 'POST' }).finally(() => {
+        window.location.href = '/login';
+      });
+    }
     throw new ApiError('Sessão expirada', 401);
   }
 
