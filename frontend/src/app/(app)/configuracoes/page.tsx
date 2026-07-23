@@ -15,6 +15,7 @@ import {
   cx
 } from '@/components/ui';
 import { api } from '@/lib/api';
+import { WebhookTutorial } from '@/components/webhook-tutorial';
 import type { Settings, WhatsappConnectResponse, WhatsappStatus } from '@/lib/types';
 
 export default function ConfiguracoesPage() {
@@ -420,6 +421,8 @@ export default function ConfiguracoesPage() {
             Quando o gateway confirma um Pix, esta URL marca a fatura como paga, atualiza o
             painel em tempo real e dispara a confirmação no WhatsApp do cliente.
           </p>
+
+          <WebhookTutorial />
         </div>
       </Card>
 

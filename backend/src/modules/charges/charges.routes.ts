@@ -15,6 +15,7 @@ import {
   listCharges,
   markChargePaid,
   reactivateCharge,
+  unmarkChargePaid,
   serializeCharge,
   updateCharge,
   type ChargeStatus
@@ -190,6 +191,20 @@ export default function chargesRouter(deps: AppDeps): Router {
       }
 
       res.json(serializeCharge({ ...updated!, client_name: existing.client_name, client_phone: existing.client_phone }));
+    })
+  );
+
+  // Botão "Desfazer" do toast exibido logo após marcar como paga manualmente.
+  router.post(
+    '/:id/unpay',
+    asyncHandler(async (req, res) => {
+      const { id } = idParam.parse(req.params);
+      const updated = await unmarkChargePaid(req.userId, id);
+      if (!updated) {
+        throw new AppError('Só é possível desfazer a baixa de faturas pagas', 409);
+      }
+      publish(req.userId, { type: 'payment', chargeId: id, source: 'manual_undo' });
+      res.json(serializeCharge(updated));
     })
   );
 

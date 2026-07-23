@@ -206,6 +206,31 @@ export async function markChargePaid(
   );
 }
 
+/**
+ * Reverte a baixa manual (botão "Desfazer" do toast de "Marcar como paga").
+ * Volta ao status que faria sentido hoje (OVERDUE se o vencimento já passou,
+ * senão PENDING) e limpa paid_at/net_amount_cents. Só se aplica a faturas
+ * PAID — se o gateway já confirmou o pagamento de verdade antes do usuário
+ * clicar em "Desfazer", a próxima notificação do webhook marca como paga de
+ * novo, então não há inconsistência duradoura.
+ */
+export async function unmarkChargePaid(
+  userId: string,
+  chargeId: string
+): Promise<ChargeRow | null> {
+  return queryOne<ChargeRow>(
+    `UPDATE charges
+        SET status = CASE WHEN due_date < CURRENT_DATE THEN 'OVERDUE'::charge_status
+                           ELSE 'PENDING'::charge_status END,
+            paid_at = NULL,
+            net_amount_cents = NULL,
+            updated_at = now()
+      WHERE user_id = $1 AND id = $2 AND status = 'PAID'
+      RETURNING *`,
+    [userId, chargeId]
+  );
+}
+
 export async function cancelCharge(
   userId: string,
   chargeId: string

@@ -23,7 +23,13 @@ import {
   type BadgeVariant
 } from '@/components/ui';
 import { api, ApiError } from '@/lib/api';
-import { formatDateBR, formatPhoneBR, isRepeatedDigits, isValidDocument } from '@/lib/format';
+import {
+  formatDateBR,
+  formatPhoneBR,
+  isRepeatedDigits,
+  isValidDocument,
+  isValidEmail
+} from '@/lib/format';
 import type { Client, ClientStatus } from '@/lib/types';
 
 interface ClientForm {
@@ -79,6 +85,7 @@ function ClientesContent() {
   const [saving, setSaving] = useState(false);
   const [docHint, setDocHint] = useState<string | null>(null);
   const [phoneHint, setPhoneHint] = useState<string | null>(null);
+  const [emailHint, setEmailHint] = useState<string | null>(null);
 
   function validateDocument(value: string) {
     setDocHint(value.trim() && !isValidDocument(value) ? 'CPF/CNPJ inválido' : null);
@@ -88,6 +95,12 @@ function ClientesContent() {
     const digits = value.replace(/\D/g, '');
     setPhoneHint(
       digits && isRepeatedDigits(digits) ? 'Telefone inválido' : null
+    );
+  }
+
+  function validateEmail(value: string) {
+    setEmailHint(
+      value.trim() && !isValidEmail(value) ? 'E-mail inválido — use o formato nome@dominio.com' : null
     );
   }
 
@@ -117,6 +130,7 @@ function ClientesContent() {
     setFormError(null);
     setDocHint(null);
     setPhoneHint(null);
+    setEmailHint(null);
     setModalOpen(true);
   }
 
@@ -132,11 +146,16 @@ function ClientesContent() {
     setFormError(null);
     setDocHint(null);
     setPhoneHint(null);
+    setEmailHint(null);
     setModalOpen(true);
   }
 
   async function submit(event: FormEvent) {
     event.preventDefault();
+    if (form.email.trim() && !isValidEmail(form.email)) {
+      setEmailHint('E-mail inválido — use o formato nome@dominio.com');
+      return;
+    }
     setSaving(true);
     setFormError(null);
     const payload = {
@@ -393,11 +412,12 @@ function ClientesContent() {
                 required
               />
             </Field>
-            <Field label="Email">
+            <Field label="Email" error={emailHint}>
               <Input
                 type="email"
                 value={form.email}
                 onChange={(event) => setForm({ ...form, email: event.target.value })}
+                onBlur={(event) => validateEmail(event.target.value)}
                 placeholder="cliente@email.com"
               />
             </Field>

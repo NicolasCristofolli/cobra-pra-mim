@@ -259,7 +259,7 @@ function CobrancasContent() {
 
   async function action(
     charge: Charge,
-    kind: 'pay' | 'notify' | 'reactivate',
+    kind: 'notify' | 'reactivate',
     successMessage: string
   ) {
     setActingId(charge.id);
@@ -278,6 +278,32 @@ function CobrancasContent() {
       push('error', (error as Error).message);
     } finally {
       setActingId(null);
+    }
+  }
+
+  async function markPaid(charge: Charge) {
+    setActingId(charge.id);
+    try {
+      await api(`/charges/${charge.id}/pay`, { method: 'POST' });
+      push('success', 'Fatura marcada como paga.', {
+        label: 'Desfazer',
+        onClick: () => undoPay(charge.id)
+      });
+      await load();
+    } catch (error) {
+      push('error', (error as Error).message);
+    } finally {
+      setActingId(null);
+    }
+  }
+
+  async function undoPay(chargeId: string) {
+    try {
+      await api(`/charges/${chargeId}/unpay`, { method: 'POST' });
+      push('success', 'Baixa desfeita — a fatura voltou a ficar em aberto.');
+      await load();
+    } catch (error) {
+      push('error', (error as Error).message);
     }
   }
 
@@ -532,9 +558,7 @@ function CobrancasContent() {
                                 <Send className="h-4 w-4" />
                               </IconButton>
                               <IconButton
-                                onClick={() =>
-                                  action(charge, 'pay', 'Fatura marcada como paga.')
-                                }
+                                onClick={() => markPaid(charge)}
                                 disabled={busy}
                                 title="Marcar como paga (recebi por fora)"
                                 className="hover:bg-leaf-50 hover:text-leaf-700"

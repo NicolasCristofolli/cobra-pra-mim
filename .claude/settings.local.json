@@ -69,7 +69,31 @@
       "Bash(curl -s \"https://raw.githubusercontent.com/EvolutionAPI/evolution-api/main/docker-compose.yaml\")",
       "Bash(curl -s \"https://raw.githubusercontent.com/EvolutionAPI/evolution-api/main/Docker/docker-compose.yaml\")",
       "Bash(curl -s \"https://raw.githubusercontent.com/EvolutionAPI/evolution-api/main/README.md\")",
-      "Bash(curl -s \"https://hub.docker.com/v2/repositories/evoapicloud/evolution-api/tags/?page_size=100\")"
+      "Bash(curl -s \"https://hub.docker.com/v2/repositories/evoapicloud/evolution-api/tags/?page_size=100\")",
+      "Bash(docker.exe compose *)",
+      "Bash(docker.exe info *)",
+      "Bash(sudo -n apt-get install -y sshpass)",
+      "Bash(python3 -c \"import pexpect\")",
+      "Bash(apt-get install *)",
+      "Bash(ssh *)",
+      "Bash(export SSH_ASKPASS=\"$SCRATCH/askpass.sh\")",
+      "Bash(export SSH_ASKPASS_REQUIRE=force)",
+      "Bash(export DISPLAY=:0)",
+      "Bash(echo \"EXIT_CODE=$?\")",
+      "Bash(cat /tmp/claude-1000/-mnt-d-Users-Nicolas-Downloads-cobra-pra-mim-cobra-pra-mim/f3e9bfa3-4c02-4c00-b462-6bf6e6fcb00a/scratchpad/ssh_out.log)",
+      "Bash(ssh-keygen *)",
+      "Bash(echo \"EXIT=$?\")",
+      "Bash(wc -l /tmp/claude-1000/-mnt-d-Users-Nicolas-Downloads-cobra-pra-mim-cobra-pra-mim/f3e9bfa3-4c02-4c00-b462-6bf6e6fcb00a/scratchpad/evolution_logs.txt)",
+      "Bash(echo '--- pm2 logs cobra-api errors only ---')",
+      "Bash(cat)",
+      "Bash(base64 -w0 /tmp/claude-1000/-mnt-d-Users-Nicolas-Downloads-cobra-pra-mim-cobra-pra-mim/f3e9bfa3-4c02-4c00-b462-6bf6e6fcb00a/scratchpad/fix_env.py)",
+      "Bash(date +%s)",
+      "Bash(sleep 3)",
+      "Bash(node -e ' *)",
+      "Bash(python3 -c \"import json,sys; print\\(json.load\\(sys.stdin\\)['scripts']\\)\")",
+      "Bash(timeout 60 npx vitest run)",
+      "Bash(git -C /mnt/d/Users/Nicolas/Downloads/cobra-pra-mim/cobra-pra-mim status --porcelain)",
+      "Bash(git -C /mnt/d/Users/Nicolas/Downloads/cobra-pra-mim/cobra-pra-mim checkout -- frontend/tsconfig.tsbuildinfo)"
     ]
   }
 }

@@ -22,12 +22,12 @@
 -- em produção.
 -- ============================================================================
 
-ALTER TABLE clients ADD COLUMN deleted_at TIMESTAMPTZ;
+ALTER TABLE clients ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
 
 UPDATE clients SET document = regexp_replace(document, '\D', '', 'g') WHERE document IS NOT NULL;
 
-CREATE UNIQUE INDEX clients_user_phone_unique ON clients (user_id, phone) WHERE deleted_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS clients_user_phone_unique ON clients (user_id, phone) WHERE deleted_at IS NULL;
 
-CREATE UNIQUE INDEX clients_user_email_unique ON clients (user_id, lower(email)) WHERE email IS NOT NULL AND deleted_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS clients_user_email_unique ON clients (user_id, lower(email)) WHERE email IS NOT NULL AND deleted_at IS NULL;
 
-CREATE UNIQUE INDEX clients_user_document_unique ON clients (user_id, document) WHERE document IS NOT NULL AND deleted_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS clients_user_document_unique ON clients (user_id, document) WHERE document IS NOT NULL AND deleted_at IS NULL;

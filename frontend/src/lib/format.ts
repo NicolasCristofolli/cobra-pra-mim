@@ -47,6 +47,11 @@ export function inputTextToCents(text: string): number {
   return digits ? Number(digits) : 0;
 }
 
+/** Exige usuário@domínio.tld — domínio com pelo menos um ponto e TLD de 2+ letras (.com, .com.br etc). */
+export function isValidEmail(email: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[a-zA-Z]{2,}$/.test(email.trim());
+}
+
 /** true para "00000000000", "11111111111" etc. — números/documentos placeholder. */
 export function isRepeatedDigits(digits: string): boolean {
   return /^(\d)\1+$/.test(digits);
