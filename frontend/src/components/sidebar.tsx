@@ -5,6 +5,7 @@
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import {
+  BookOpen,
   LayoutDashboard,
   LogOut,
   MessageSquareText,
@@ -90,6 +91,11 @@ export function Sidebar() {
         {/* O perfil do usuário fica na Topbar, ao lado da busca. */}
         <div className="space-y-0.5 border-t border-leaf-400 pt-3">
           <NavItem
+            href="/tutorial"
+            label="Tutorial de configuração"
+            active={pathname.startsWith('/tutorial')}
+          />
+          <NavItem
             href="/configuracoes"
             label="Configurações"
             active={pathname.startsWith('/configuracoes')}
@@ -105,6 +111,7 @@ export function Sidebar() {
         <nav className="flex min-w-0 items-center gap-1 overflow-x-auto">
           {[
             ...NAV,
+            { href: '/tutorial', label: 'Tutorial de configuração', icon: BookOpen },
             { href: '/configuracoes', label: 'Configurações', icon: Settings }
           ].map(
             ({ href, label, icon: Icon }) => {

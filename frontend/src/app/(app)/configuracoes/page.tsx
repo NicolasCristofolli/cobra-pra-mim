@@ -1,7 +1,8 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Copy, KeyRound, QrCode, RefreshCw, Unplug, Webhook } from 'lucide-react';
+import Link from 'next/link';
+import { BookOpen, Copy, KeyRound, QrCode, RefreshCw, Unplug, Webhook } from 'lucide-react';
 import { useToast } from '@/components/toast';
 import {
   Button,
@@ -15,7 +16,6 @@ import {
   cx
 } from '@/components/ui';
 import { api } from '@/lib/api';
-import { WebhookTutorial } from '@/components/webhook-tutorial';
 import type { Settings, WhatsappConnectResponse, WhatsappStatus } from '@/lib/types';
 
 export default function ConfiguracoesPage() {
@@ -422,7 +422,15 @@ export default function ConfiguracoesPage() {
             painel em tempo real e dispara a confirmação no WhatsApp do cliente.
           </p>
 
-          <WebhookTutorial />
+          <Link
+            href="/tutorial"
+            className="flex items-center justify-between gap-2 rounded-xl border border-primary-200 bg-primary-50 px-3.5 py-3 text-sm font-bold text-primary-700 transition-colors hover:bg-primary-100"
+          >
+            <span className="flex items-center gap-2">
+              <BookOpen className="h-4 w-4" /> Tutorial de configuração (Asaas e Mercado Pago)
+            </span>
+            <span aria-hidden>→</span>
+          </Link>
         </div>
       </Card>
 

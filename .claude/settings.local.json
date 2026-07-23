@@ -93,7 +93,18 @@
       "Bash(python3 -c \"import json,sys; print\\(json.load\\(sys.stdin\\)['scripts']\\)\")",
       "Bash(timeout 60 npx vitest run)",
       "Bash(git -C /mnt/d/Users/Nicolas/Downloads/cobra-pra-mim/cobra-pra-mim status --porcelain)",
-      "Bash(git -C /mnt/d/Users/Nicolas/Downloads/cobra-pra-mim/cobra-pra-mim checkout -- frontend/tsconfig.tsbuildinfo)"
+      "Bash(git -C /mnt/d/Users/Nicolas/Downloads/cobra-pra-mim/cobra-pra-mim checkout -- frontend/tsconfig.tsbuildinfo)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)",
+      "Read(//home/nicolas/.claude/image-cache/b36f03df-de44-4600-bcb0-186c06d3f80c/**)",
+      "Bash(pip install *)",
+      "Bash(python3 -c \"import PIL; print\\('ok', PIL.__version__\\)\")",
+      "Bash(python3 -m venv /tmp/claude-1000/-mnt-d-Users-Nicolas-Downloads-cobra-pra-mim-cobra-pra-mim/b36f03df-de44-4600-bcb0-186c06d3f80c/scratchpad/venv)",
+      "Bash(/tmp/claude-1000/-mnt-d-Users-Nicolas-Downloads-cobra-pra-mim-cobra-pra-mim/b36f03df-de44-4600-bcb0-186c06d3f80c/scratchpad/venv/bin/pip install *)",
+      "Bash(/tmp/claude-1000/-mnt-d-Users-Nicolas-Downloads-cobra-pra-mim-cobra-pra-mim/b36f03df-de44-4600-bcb0-186c06d3f80c/scratchpad/venv/bin/python -c \"import PIL; print\\('ok', PIL.__version__\\)\")",
+      "Bash($PY *)",
+      "Bash(/tmp/claude-1000/-mnt-d-Users-Nicolas-Downloads-cobra-pra-mim-cobra-pra-mim/b36f03df-de44-4600-bcb0-186c06d3f80c/scratchpad/venv/bin/python *)"
     ]
   }
 }
