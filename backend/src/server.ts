@@ -11,6 +11,7 @@ async function start(): Promise<void> {
   // Fail-fast: melhor cair no boot com mensagem clara do que em runtime.
   void env.databaseUrl;
   void env.jwtSecret;
+  void env.evolutionApiKey;
   encrypt('startup-check'); // valida que ENCRYPTION_KEY decodifica p/ 32 bytes
 
   await getPool().query('SELECT 1');
@@ -20,8 +21,8 @@ async function start(): Promise<void> {
   }
 
   const app = createApp(defaultDeps);
-  app.listen(env.port, () => {
-    console.log(`[api] Cobra pra mim ouvindo em http://localhost:${env.port}`);
+  app.listen(env.port, env.host, () => {
+    console.log(`[api] Cobra pra mim ouvindo em http://${env.host}:${env.port}`);
   });
 
   if (!env.cronDisabled) {
@@ -45,6 +46,8 @@ async function start(): Promise<void> {
 }
 
 start().catch((error) => {
-  console.error('[boot] falha ao iniciar:', error instanceof Error ? error.message : error);
+  // Loga o erro completo: AggregateError (ex.: ECONNREFUSED no Postgres) tem
+  // message vazia e escondia a causa real.
+  console.error('[boot] falha ao iniciar:', error);
   process.exit(1);
 });

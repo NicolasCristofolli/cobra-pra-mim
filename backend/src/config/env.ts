@@ -21,6 +21,11 @@ export const env = {
   get port() {
     return Number(process.env.PORT ?? 4000);
   },
+  // Interface de escuta. Padrão loopback: em produção a API só é acessível
+  // pelo Caddy (api.cobrapramim.cloud), nunca direto na porta 4000.
+  get host() {
+    return process.env.HOST ?? '127.0.0.1';
+  },
   get databaseUrl() {
     return required('DATABASE_URL');
   },
@@ -46,6 +51,9 @@ export const env = {
     return process.env.EVOLUTION_API_URL ?? 'http://localhost:8080';
   },
   get evolutionApiKey() {
+    // Em produção não há fallback: uma chave conhecida publicamente daria
+    // controle total das instâncias de WhatsApp a quem alcançasse a Evolution.
+    if (this.isProd) return required('EVOLUTION_API_KEY');
     return process.env.EVOLUTION_API_KEY ?? 'cobra-evolution-local-key';
   },
   get trialDays() {

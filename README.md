@@ -28,7 +28,8 @@ SaaS B2B de **cobranças recorrentes via Pix + WhatsApp** para pequenos negócio
 Pré-requisitos: Node 20+, Docker (para o Postgres) — ou um Postgres 16 local.
 
 ```bash
-# 1) Banco
+# 1) Banco (preencha as senhas no .env da raiz)
+cp .env.example .env
 docker compose up -d db          # cria os bancos cobra e cobra_test
 
 # 2) Backend
@@ -56,6 +57,10 @@ curl -X POST "http://localhost:4000/webhooks/payments/<USER_ID>" \
 ```
 
 `USER_ID` e a URL completa aparecem em **Configurações → Webhook**; o `CHARGE_ID` em qualquer fatura do Histórico.
+
+## Deploy na VPS
+
+Veja [deploy/README.md](deploy/README.md): Caddy, PM2, backup diário, firewall e rotina de deploy.
 
 ## Configurando produção de verdade
 

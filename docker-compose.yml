@@ -1,44 +1,121 @@
+# Infra do Cobra pra mim: Postgres + Evolution API v2 + Redis (cache da Evolution).
+# Segredos vêm do arquivo .env ao lado deste compose (modelo: .env.example).
+# Todas as portas ficam presas em 127.0.0.1: o Docker ignora o UFW, então o
+# bind no loopback é o que impede acesso direto pela internet.
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   db:
     image: postgres:16-alpine
     container_name: cobra-db
+    restart: unless-stopped
     environment:
-      POSTGRES_USER: cobra
-      POSTGRES_PASSWORD: cobra
-      POSTGRES_DB: cobra
-      POSTGRES_HOST_AUTH_METHOD: trust
+      POSTGRES_USER: ${POSTGRES_USER:-cobra}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD no .env}
+      POSTGRES_DB: ${POSTGRES_DB:-cobra}
+      # Usados só pelo docker/initdb/02-create-evolution-db.sh (1ª inicialização)
+      EVOLUTION_DB_USER: ${EVOLUTION_DB_USER:-evolution}
+      EVOLUTION_DB_PASSWORD: ${EVOLUTION_DB_PASSWORD:?defina EVOLUTION_DB_PASSWORD no .env}
+      TZ: America/Sao_Paulo
+    command:
+      - postgres
+      - -c
+      - shared_buffers=256MB
+      - -c
+      - max_connections=100
+      - -c
+      - log_min_duration_statement=1000
     ports:
-      - "5435:5432"
+      - "127.0.0.1:5435:5432"
     volumes:
       - cobra_pgdata:/var/lib/postgresql/data
       - ./docker/initdb:/docker-entrypoint-initdb.d:ro
+    shm_size: 256mb
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    mem_limit: 1g
+    logging: *default-logging
+
+  # Cache da Evolution. Sem ele, a v2 usa cache local, que não implementa
+  # hSet/hGet e gera SessionError em loop nas sessões do WhatsApp.
+  redis:
+    image: redis:7.4-alpine
+    container_name: cobra-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
+    volumes:
+      - evolution_redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    mem_limit: 320m
+    logging: *default-logging
 
   # Evolution API v2 — provedor único de WhatsApp do sistema.
-  # Porta padrão 8080; a API key abaixo é a mesma colada nas Configurações.
   evolution:
     image: evoapicloud/evolution-api:v2.1.1
     container_name: cobra-evolution
+    restart: unless-stopped
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     environment:
-      AUTHENTICATION_API_KEY: ${EVOLUTION_API_KEY:-cobra-evolution-local-key}
+      SERVER_URL: ${EVOLUTION_SERVER_URL:-http://localhost:8080}
+      AUTHENTICATION_API_KEY: ${EVOLUTION_API_KEY:?defina EVOLUTION_API_KEY no .env}
+      AUTHENTICATION_EXPOSE_IN_FETCH_INSTANCES: "false"
+      DEL_INSTANCE: "false"
+      LOG_LEVEL: ERROR,WARN
+      LOG_BAILEYS: error
+      LOG_COLOR: "false"
+      TZ: America/Sao_Paulo
+
       DATABASE_ENABLED: "true"
       DATABASE_PROVIDER: postgresql
-      DATABASE_CONNECTION_URI: postgresql://cobra:cobra@db:5432/evolution
+      DATABASE_CONNECTION_URI: postgresql://${EVOLUTION_DB_USER:-evolution}:${EVOLUTION_DB_PASSWORD}@db:5432/evolution?schema=public
       DATABASE_CONNECTION_CLIENT_NAME: evolution
-      CACHE_REDIS_ENABLED: "false"
-      CACHE_LOCAL_ENABLED: "true"
+      # O sistema só envia cobranças: guarda o necessário para a sessão e para
+      # reenvios do Baileys, sem importar o histórico inteiro do celular.
+      DATABASE_SAVE_DATA_INSTANCE: "true"
+      DATABASE_SAVE_DATA_NEW_MESSAGE: "true"
+      DATABASE_SAVE_MESSAGE_UPDATE: "true"
+      DATABASE_SAVE_DATA_CONTACTS: "true"
+      DATABASE_SAVE_DATA_CHATS: "true"
+      DATABASE_SAVE_DATA_LABELS: "false"
+      DATABASE_SAVE_DATA_HISTORIC: "false"
+
+      CACHE_REDIS_ENABLED: "true"
+      CACHE_REDIS_URI: redis://redis:6379/6
+      CACHE_REDIS_PREFIX_KEY: evolution
+      CACHE_REDIS_SAVE_INSTANCES: "false"
+      CACHE_LOCAL_ENABLED: "false"
+
       # Versão do cliente WhatsApp Web anunciada no handshake. A versão embutida
       # na imagem v2.1.1 ficou obsoleta e o WhatsApp recusa a conexão em silêncio
       # (instância presa em "connecting", QR nunca gerado). Se o QR parar de sair
       # de novo, atualize com o valor de:
       # https://raw.githubusercontent.com/WhiskeySockets/Baileys/master/src/Defaults/baileys-version.json
-      CONFIG_SESSION_PHONE_VERSION: 2.3000.1035194821
+      CONFIG_SESSION_PHONE_VERSION: 2.3000.1043857760
     depends_on:
-      - db
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     volumes:
       - evolution_instances:/evolution/instances
+    mem_limit: 1g
+    logging: *default-logging
 
 volumes:
   cobra_pgdata:
   evolution_instances:
+  evolution_redis:
