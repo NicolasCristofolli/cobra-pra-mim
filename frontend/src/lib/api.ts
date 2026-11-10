@@ -40,6 +40,16 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
     throw new ApiError('Sessão expirada', 401);
   }
 
+  // 402 = assinatura bloqueada (sem plano, aguardando pagamento ou expirada).
+  // O middleware do Next já barra a navegação. Isto cobre a assinatura que
+  // expira com a tela aberta.
+  if (response.status === 402 && !path.startsWith('/billing/')) {
+    if (typeof window !== 'undefined' && !window.location.pathname.startsWith('/planos')) {
+      window.location.href = '/planos';
+    }
+    throw new ApiError('Assinatura inativa', 402);
+  }
+
   const body = await response.json().catch(() => ({}));
   if (!response.ok) {
     throw new ApiError(

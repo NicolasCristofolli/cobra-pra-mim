@@ -6,6 +6,7 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import {
   BookOpen,
+  CreditCard,
   LayoutDashboard,
   LogOut,
   MessageSquareText,
@@ -100,6 +101,7 @@ export function Sidebar() {
             label="Configurações"
             active={pathname.startsWith('/configuracoes')}
           />
+          <NavItem href="/planos" label="Assinatura" active={pathname.startsWith('/planos')} />
         </div>
       </aside>
 
@@ -112,7 +114,8 @@ export function Sidebar() {
           {[
             ...NAV,
             { href: '/tutorial', label: 'Tutorial de configuração', icon: BookOpen },
-            { href: '/configuracoes', label: 'Configurações', icon: Settings }
+            { href: '/configuracoes', label: 'Configurações', icon: Settings },
+            { href: '/planos', label: 'Assinatura', icon: CreditCard }
           ].map(
             ({ href, label, icon: Icon }) => {
               const active = pathname.startsWith(href);

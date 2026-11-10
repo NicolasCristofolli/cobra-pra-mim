@@ -56,8 +56,18 @@ export const env = {
     if (this.isProd) return required('EVOLUTION_API_KEY');
     return process.env.EVOLUTION_API_KEY ?? 'cobra-evolution-local-key';
   },
-  get trialDays() {
-    return Number(process.env.TRIAL_DAYS ?? 7);
+  // Conta Asaas da PLATAFORMA (assinatura do SaaS). Sem ela, o checkout
+  // responde 503 e nenhum pagamento novo é criado.
+  get asaasPlatformApiKey() {
+    return process.env.ASAAS_PLATFORM_API_KEY || null;
+  },
+  // Token que o Asaas envia no header asaas-access-token do webhook da plataforma.
+  get asaasPlatformWebhookToken() {
+    return process.env.ASAAS_PLATFORM_WEBHOOK_TOKEN || null;
+  },
+  // Para onde o Asaas redireciona após o pagamento (domínio cadastrado no Asaas).
+  get platformCheckoutSuccessUrl() {
+    return process.env.PLATFORM_CHECKOUT_SUCCESS_URL || null;
   },
   get cronSchedule() {
     return process.env.CRON_SCHEDULE ?? '0 8 * * *';

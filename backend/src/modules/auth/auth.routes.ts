@@ -4,7 +4,9 @@ import bcrypt from 'bcryptjs';
 import { randomBytes } from 'node:crypto';
 import { z } from 'zod';
 import { query, queryOne, withTransaction } from '../../db';
-import { env } from '../../config/env';
+import { resolveAccess } from '../../services/subscription/access';
+import { findSubscriptionByUser } from '../../services/subscription/subscription.repo';
+import { serializeSubscription } from '../billing/billing.serializers';
 import { asyncHandler, AppError, unauthorized } from '../../lib/errors';
 import { encrypt } from '../../lib/crypto';
 import { DEFAULT_CHARGE_TEMPLATE, DEFAULT_PAID_TEMPLATE } from '../../lib/template';
@@ -22,6 +24,8 @@ const loginLimiter = rateLimit({
   limit: 10,
   standardHeaders: true,
   legacyHeaders: false,
+  // A suíte faz dezenas de logins pelo mesmo IP em segundos.
+  skip: () => process.env.NODE_ENV === 'test',
   message: { error: 'Muitas tentativas de login. Aguarde um minuto.' }
 });
 
@@ -55,13 +59,13 @@ router.post(
     const passwordHash = await bcrypt.hash(password, 10);
 
     const user = await withTransaction(async (tx) => {
-      // A conta nasce TRIALING: acesso liberado até o fim do trial; depois o
-      // gate de assinatura (402) exige a mensalidade ativa.
+      // A conta nasce SEM assinatura: o acesso às rotas de negócio só libera
+      // depois de escolher o plano e o webhook do Asaas confirmar o pagamento.
       const inserted = await tx.query<UserRow>(
-        `INSERT INTO users (name, email, password_hash, trial_ends_at)
-         VALUES ($1, $2, $3, now() + ($4 * interval '1 day'))
+        `INSERT INTO users (name, email, password_hash)
+         VALUES ($1, $2, $3)
          RETURNING id, name, email, password_hash`,
-        [name, email, passwordHash, env.trialDays]
+        [name, email, passwordHash]
       );
       const created = inserted.rows[0]!;
       // Onboarding: settings já nascem com templates padrão e um segredo de
@@ -113,23 +117,18 @@ router.get(
   '/me',
   requireAuth,
   asyncHandler(async (req, res) => {
-    const user = await queryOne<
-      Omit<UserRow, 'password_hash'> & {
-        subscription_status: string;
-        trial_ends_at: string;
-      }
-    >(
-      `SELECT id, name, email, subscription_status, trial_ends_at
-         FROM users WHERE id = $1`,
+    const user = await queryOne<Omit<UserRow, 'password_hash'>>(
+      'SELECT id, name, email FROM users WHERE id = $1',
       [req.userId]
     );
     if (!user) throw unauthorized();
+    const subscription = await findSubscriptionByUser(user.id);
     res.json({
       id: user.id,
       name: user.name,
       email: user.email,
-      subscriptionStatus: user.subscription_status,
-      trialEndsAt: user.trial_ends_at
+      access: resolveAccess(subscription),
+      subscription: serializeSubscription(subscription)
     });
   })
 );

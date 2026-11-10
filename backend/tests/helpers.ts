@@ -15,7 +15,9 @@ import type {
 } from '../src/services/gateway';
 
 export async function truncateAll(): Promise<void> {
-  await query('TRUNCATE notification_logs, charges, settings, clients, users CASCADE');
+  await query(
+    'TRUNCATE notification_logs, charges, settings, clients, platform_webhook_events, users CASCADE'
+  );
 }
 
 export interface TestUser {
@@ -25,8 +27,16 @@ export interface TestUser {
   webhookSecret: string;
 }
 
+export type TestSubscription = 'ACTIVE' | 'NONE';
+
 export async function createUser(
-  options: { email?: string; withSettings?: boolean; webhookSecret?: string } = {}
+  options: {
+    email?: string;
+    withSettings?: boolean;
+    webhookSecret?: string;
+    /** Padrão ACTIVE: os testes de negócio não querem esbarrar no 402. */
+    subscription?: TestSubscription;
+  } = {}
 ): Promise<TestUser> {
   const email = options.email ?? `user-${randomUUID().slice(0, 8)}@test.dev`;
   const password = 'senha-super-8';
@@ -38,6 +48,15 @@ export async function createUser(
     ['Usuário Teste', email, await bcrypt.hash(password, 4)]
   );
   const id = row!.id;
+
+  if ((options.subscription ?? 'ACTIVE') === 'ACTIVE') {
+    await query(
+      `INSERT INTO subscriptions (user_id, plan_id, status, current_period_end, gateway_subscription_id)
+       VALUES ($1, (SELECT id FROM plans WHERE code = 'mensal'), 'ACTIVE',
+               now() + interval '30 days', $2)`,
+      [id, `sub_test_${id.slice(0, 8)}`]
+    );
+  }
 
   if (options.withSettings !== false) {
     await query(
@@ -68,9 +87,16 @@ export interface SentMessage {
   message: string;
 }
 
+export interface PlatformCall {
+  method: string;
+  args: unknown;
+}
+
 export interface TestHarness {
   app: ReturnType<typeof createApp>;
   deps: AppDeps;
+  /** Chamadas ao Asaas da plataforma (checkout), em ordem. */
+  platformCalls: PlatformCall[];
   sentMessages: SentMessage[];
   gatewayCalls: CreatePixChargeInput[];
   /** Faz o próximo sendText falhar uma vez (simula instabilidade). */
@@ -78,14 +104,42 @@ export interface TestHarness {
 }
 
 export function buildTestApp(
-  overrides: { withGateway?: boolean; withWhatsApp?: boolean } = {}
+  overrides: { withGateway?: boolean; withWhatsApp?: boolean; withPlatformBilling?: boolean } = {}
 ): TestHarness {
+  const platformCalls: PlatformCall[] = [];
+  let platformCounter = 0;
   const sentMessages: SentMessage[] = [];
   const gatewayCalls: CreatePixChargeInput[] = [];
   let failOnce = false;
   let pixCounter = 0;
 
   const deps: AppDeps = {
+    platformBillingFactory: () =>
+      overrides.withPlatformBilling === false
+        ? null
+        : {
+            async ensureCustomer(input) {
+              platformCalls.push({ method: 'ensureCustomer', args: input });
+              return 'cus_fake';
+            },
+            async createSubscription(input) {
+              platformCalls.push({ method: 'createSubscription', args: input });
+              platformCounter++;
+              return `sub_fake_${platformCounter}`;
+            },
+            async findFirstPayment(subscriptionId) {
+              platformCalls.push({ method: 'findFirstPayment', args: subscriptionId });
+              return {
+                paymentId: `pay_${subscriptionId}`,
+                valueCents: 4990,
+                dueDate: new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date()),
+                invoiceUrl: `https://fake.asaas/i/${subscriptionId}`
+              };
+            },
+            async cancelSubscription(subscriptionId) {
+              platformCalls.push({ method: 'cancelSubscription', args: subscriptionId });
+            }
+          },
     gatewayFactory: () =>
       overrides.withGateway === false
         ? null
@@ -122,6 +176,7 @@ export function buildTestApp(
   return {
     app: createApp(deps),
     deps,
+    platformCalls,
     sentMessages,
     gatewayCalls,
     failNextSend: () => {

@@ -47,6 +47,28 @@ sudo bash deploy/harden-server.sh
   `OLD_ENCRYPTION_KEY=... NEW_ENCRYPTION_KEY=... npx tsx --env-file=.env src/db/rotate-encryption-key.ts` (em `backend/`). Depois grave a nova chave no `.env` e reinicie a API.
 - **Nunca** rode `npm test` na VPS: a suíte usa o banco `cobra_test` do Postgres de produção.
 
+## Assinatura da plataforma (checkout)
+
+Fluxo: o usuário escolhe o plano em `/planos`, paga na página do Asaas e a
+conta é ativada **somente** pelo webhook. Com o pagamento atrasado, o app mostra
+um aviso durante a carência (`plans.grace_days`, padrão 5 dias). Depois disso,
+o Next redireciona para `/planos`, a API responde `402` e o motor de cobrança
+para de enviar WhatsApp por essa conta.
+
+Para ligar em produção:
+1. No `backend/.env`: `ASAAS_PLATFORM_API_KEY`, `ASAAS_PLATFORM_WEBHOOK_TOKEN`
+   (`openssl rand -hex 24`) e `PLATFORM_CHECKOUT_SUCCESS_URL`.
+2. No Asaas da plataforma, em Integrações > Webhooks:
+   URL `https://api.cobrapramim.cloud/webhooks/platform/asaas`, o mesmo token,
+   e os eventos de cobrança e de assinatura.
+3. Em Minha Conta > Informações, cadastre o domínio `cobrapramim.cloud`
+   (é exigido para o redirecionamento após o pagamento).
+4. Preços: `UPDATE plans SET price_cents = 5990 WHERE code = 'mensal';`
+   Para desativar um plano: `active = false`.
+
+As contas que já existiam no deploy da migração 007 ganham 15 dias de cortesia
+(`TRIALING`).
+
 ## Backup fora da VPS
 
 Um backup que fica só na VPS some junto com ela. Faça as duas coisas:

@@ -1,13 +1,63 @@
 // Espelho dos serializers do backend — a única fonte de verdade de shape.
 
-export type SubscriptionStatus = 'TRIALING' | 'ACTIVE' | 'PAST_DUE' | 'CANCELED';
+export type SubscriptionStatus =
+  | 'PENDING_PAYMENT'
+  | 'TRIALING'
+  | 'ACTIVE'
+  | 'PAST_DUE'
+  | 'EXPIRED'
+  | 'CANCELED';
+
+/** Decisão de acesso calculada pelo backend (services/subscription/access.ts). */
+export type AccessState = 'FULL' | 'WARNING' | 'BLOCKED';
+export type AccessReason = 'OK' | 'TRIAL' | 'PAST_DUE' | 'NO_PLAN' | 'PENDING_PAYMENT' | 'EXPIRED';
+
+export interface Access {
+  state: AccessState;
+  reason: AccessReason;
+  blocksAt: string | null;
+}
+
+export type BillingCycle = 'MONTHLY' | 'YEARLY';
+
+export interface Plan {
+  code: string;
+  name: string;
+  description: string | null;
+  priceCents: number;
+  cycle: BillingCycle;
+}
+
+export interface Subscription {
+  status: SubscriptionStatus;
+  planCode: string;
+  planName: string;
+  priceCents: number;
+  cycle: BillingCycle;
+  currentPeriodEnd: string | null;
+  trialEndsAt: string | null;
+  canceledAt: string | null;
+}
+
+export interface OpenPayment {
+  status: 'PENDING' | 'OVERDUE';
+  amountCents: number;
+  dueDate: string;
+  checkoutUrl: string | null;
+}
+
+export interface BillingStatus {
+  access: Access;
+  subscription: Subscription | null;
+  openPayment: OpenPayment | null;
+}
 
 export interface User {
   id: string;
   name: string;
   email: string;
-  subscriptionStatus: SubscriptionStatus;
-  trialEndsAt: string;
+  access: Access;
+  subscription: Subscription | null;
 }
 
 export type ClientStatus = 'ADIMPLENTE' | 'INADIMPLENTE' | 'SEM_COBRANCAS';

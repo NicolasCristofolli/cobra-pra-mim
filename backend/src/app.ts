@@ -5,7 +5,10 @@ import cookieParser from 'cookie-parser';
 import { env } from './config/env';
 import { errorHandler } from './middleware/error-handler';
 import { requireAuth } from './middleware/auth';
+import { loadAccess, requireActiveSubscription } from './middleware/subscription';
 import authRoutes from './modules/auth/auth.routes';
+import billingRouter from './modules/billing/billing.routes';
+import platformWebhookRouter from './modules/billing/platform-webhook.routes';
 import clientsRoutes from './modules/clients/clients.routes';
 import chargesRouter from './modules/charges/charges.routes';
 import dashboardRoutes from './modules/dashboard/dashboard.routes';
@@ -33,15 +36,21 @@ export function createApp(deps: AppDeps = defaultDeps): Express {
 
   // Fora do gate de sessão: auth e webhooks (chamados pelos gateways).
   app.use('/auth', authRoutes);
+  app.use('/webhooks/platform', platformWebhookRouter());
   app.use('/webhooks', webhooksRouter(deps));
 
-  // Rotas de negócio: exigem sessão válida.
-  const gate = [requireAuth];
-  app.use('/clients', gate, clientsRoutes);
-  app.use('/charges', gate, chargesRouter(deps));
-  app.use('/dashboard', gate, dashboardRoutes);
-  app.use('/settings', gate, settingsRoutes);
-  app.use('/whatsapp', gate, whatsappRoutes);
+  // Assinatura: exige sessão, mas fica liberada para quem está bloqueado
+  // (é por aqui que a pessoa escolhe o plano e paga).
+  const session = [requireAuth, loadAccess];
+  app.use('/billing', session, billingRouter(deps));
+
+  // Rotas de negócio: sessão válida E assinatura que libere acesso (senão 402).
+  const paid = [...session, requireActiveSubscription];
+  app.use('/clients', paid, clientsRoutes);
+  app.use('/charges', paid, chargesRouter(deps));
+  app.use('/dashboard', paid, dashboardRoutes);
+  app.use('/settings', paid, settingsRoutes);
+  app.use('/whatsapp', paid, whatsappRoutes);
 
   app.use(errorHandler);
   return app;

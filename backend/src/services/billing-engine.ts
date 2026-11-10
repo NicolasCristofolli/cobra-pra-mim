@@ -14,6 +14,7 @@ import {
 } from '../modules/settings/settings.routes';
 import type { AppDeps } from './deps';
 import type { GatewayPort } from './gateway';
+import { findAccessByUser } from './subscription/subscription.repo';
 
 export interface CycleReport {
   today: string;
@@ -22,6 +23,7 @@ export interface CycleReport {
   notified: number;       // mensagens de cobrança enviadas
   notifyFailed: number;   // falhas de envio/gateway (ficam para retry/manual)
   usersSkipped: number;   // usuários sem settings (nunca deveria ocorrer)
+  blockedSkipped: number; // faturas de usuários com assinatura bloqueada (não enviadas)
 }
 
 interface NotifiableRow extends ChargeRow {
@@ -319,7 +321,8 @@ export async function runBillingCycle(
     overdueMarked: 0,
     notified: 0,
     notifyFailed: 0,
-    usersSkipped: 0
+    usersSkipped: 0,
+    blockedSkipped: 0
   };
 
   report.generated = await spawnRecurringCharges(today);
@@ -327,6 +330,7 @@ export async function runBillingCycle(
 
   const toNotify = await findChargesToNotify(today);
   const settingsCache = new Map<string, SettingsRow | null>();
+  const blockedCache = new Map<string, boolean>();
 
   // Anti-spam: pausa (deps.interSendDelay) entre disparos consecutivos pelo
   // MESMO chip — a instância é por usuário, então trocar de usuário troca de
@@ -336,6 +340,17 @@ export async function runBillingCycle(
   let lastAttemptUserId: string | null = null;
 
   for (const charge of toNotify) {
+    // Assinatura bloqueada: o painel já está fechado, e o motor também para
+    // de cobrar os clientes dessa conta. As faturas ficam pendentes e saem
+    // no primeiro ciclo depois da renovação.
+    if (!blockedCache.has(charge.user_id)) {
+      blockedCache.set(charge.user_id, (await findAccessByUser(charge.user_id)).state === 'BLOCKED');
+    }
+    if (blockedCache.get(charge.user_id)) {
+      report.blockedSkipped++;
+      continue;
+    }
+
     if (!settingsCache.has(charge.user_id)) {
       settingsCache.set(charge.user_id, await findSettingsByUserId(charge.user_id));
     }
@@ -387,6 +402,10 @@ export async function sendPaymentConfirmation(
   userId: string,
   chargeId: string
 ): Promise<void> {
+  // A baixa da fatura acontece mesmo bloqueado (o dinheiro é do cliente
+  // final), mas a mensagem de confirmação é serviço da plataforma.
+  if ((await findAccessByUser(userId)).state === 'BLOCKED') return;
+
   const settings = await findSettingsByUserId(userId);
   if (!settings) return;
 

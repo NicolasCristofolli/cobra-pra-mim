@@ -99,3 +99,31 @@ export const RECURRENCE_LABEL: Record<string, string> = {
   MONTHLY: 'Mensal',
   YEARLY: 'Anual'
 };
+
+/** Data de um instante (timestamp ISO) no fuso de São Paulo: '2026-11-15T02:00Z' → '14/11/2026'. */
+export function formatInstantDateBR(iso: string | null): string {
+  if (!iso) return '—';
+  return new Date(iso).toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+}
+
+/** Dias inteiros até o instante (arredonda para cima, mínimo 0). */
+export function daysUntil(iso: string | null): number {
+  if (!iso) return 0;
+  return Math.max(0, Math.ceil((new Date(iso).getTime() - Date.now()) / 86_400_000));
+}
+
+/** Máscara de CPF/CNPJ enquanto digita. */
+export function maskCpfCnpj(value: string): string {
+  const d = value.replace(/\D/g, '').slice(0, 14);
+  if (d.length <= 11) {
+    return d
+      .replace(/^(\d{3})(\d)/, '$1.$2')
+      .replace(/^(\d{3})\.(\d{3})(\d)/, '$1.$2.$3')
+      .replace(/\.(\d{3})(\d{1,2})$/, '.$1-$2');
+  }
+  return d
+    .replace(/^(\d{2})(\d)/, '$1.$2')
+    .replace(/^(\d{2})\.(\d{3})(\d)/, '$1.$2.$3')
+    .replace(/\.(\d{3})(\d)/, '.$1/$2')
+    .replace(/(\d{4})(\d{1,2})$/, '$1-$2');
+}

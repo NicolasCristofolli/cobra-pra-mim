@@ -55,7 +55,9 @@ export default function LoginPage() {
           body: JSON.stringify({ name, email, password })
         });
       }
-      router.replace('/dashboard');
+      // Conta nova não tem plano: vai direto escolher (passo 1 do fluxo).
+      // No login, o middleware decide entre o painel e /planos.
+      router.replace(mode === 'register' ? '/planos' : '/dashboard');
     } catch (err) {
       if (err instanceof ApiError) {
         const details = err.issues?.map((issue) => issue.message).join(' · ');

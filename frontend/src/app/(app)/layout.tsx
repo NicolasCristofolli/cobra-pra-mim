@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { Sidebar } from '@/components/sidebar';
+import { SubscriptionBanner } from '@/components/subscription-banner';
 import { Topbar } from '@/components/topbar';
 import { ToastProvider } from '@/components/toast';
 import { FullPageSpinner } from '@/components/ui';
@@ -27,6 +28,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         <div className="min-h-screen lg:flex">
           <Sidebar />
           <div className="flex min-w-0 flex-1 flex-col">
+            <SubscriptionBanner user={user} />
             <Topbar />
             <main className="flex-1 px-4 py-6 lg:px-8 lg:py-8">
               <div className="mx-auto max-w-6xl 2xl:max-w-7xl">{children}</div>
