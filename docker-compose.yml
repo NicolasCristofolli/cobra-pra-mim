@@ -63,8 +63,9 @@ services:
     logging: *default-logging
 
   # Evolution API v2 — provedor único de WhatsApp do sistema.
+  # Antes de trocar a versão: deploy/backup.sh (as migrações não têm volta).
   evolution:
-    image: evoapicloud/evolution-api:v2.1.1
+    image: evoapicloud/evolution-api:v2.3.7
     container_name: cobra-evolution
     restart: unless-stopped
     ports:
@@ -100,7 +101,7 @@ services:
       CACHE_LOCAL_ENABLED: "false"
 
       # Versão do cliente WhatsApp Web anunciada no handshake. A versão embutida
-      # na imagem v2.1.1 ficou obsoleta e o WhatsApp recusa a conexão em silêncio
+      # na imagem pode ficar obsoleta e o WhatsApp recusa a conexão em silêncio
       # (instância presa em "connecting", QR nunca gerado). Se o QR parar de sair
       # de novo, atualize com o valor de:
       # https://raw.githubusercontent.com/WhiskeySockets/Baileys/master/src/Defaults/baileys-version.json

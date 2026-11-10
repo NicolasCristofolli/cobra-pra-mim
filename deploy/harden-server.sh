@@ -34,6 +34,15 @@ systemctl restart fail2ban
 echo "== Atualizações automáticas de segurança =="
 dpkg-reconfigure -f noninteractive unattended-upgrades
 
+echo "== SSH: chave própria para o usuário deploy =="
+# Copia as chaves já autorizadas no root, para você poder entrar direto como
+# deploy (ssh deploy@IP) e, no futuro, desligar o login de root.
+if [[ -s /root/.ssh/authorized_keys && ! -s /home/deploy/.ssh/authorized_keys ]]; then
+  install -d -m 700 -o deploy -g deploy /home/deploy/.ssh
+  install -m 600 -o deploy -g deploy /root/.ssh/authorized_keys /home/deploy/.ssh/authorized_keys
+  echo "Chaves copiadas. Teste em outro terminal: ssh deploy@$(hostname -I | awk '{print $1}')"
+fi
+
 echo "== SSH: root só por chave (nunca por senha) =="
 # Não desativa o root por completo: hoje o acesso à VPS é por chave do root.
 # Quando tiver uma chave em /home/deploy/.ssh/authorized_keys, troque para
