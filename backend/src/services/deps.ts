@@ -1,6 +1,7 @@
 import type { SettingsRow } from '../modules/settings/settings.routes';
 import { buildGatewayAdapter, type GatewayPort } from './gateway';
 import { buildWhatsAppAdapter, type WhatsAppPort } from './whatsapp';
+import { buildMailer, type MailerPort } from './mailer';
 import {
   buildPlatformBilling,
   type PlatformBillingPort
@@ -16,6 +17,8 @@ export interface AppDeps {
   whatsappFactory: (settings: SettingsRow) => WhatsAppPort | null;
   /** Assinatura da plataforma (checkout). null = checkout indisponível. */
   platformBillingFactory: () => PlatformBillingPort | null;
+  /** E-mail transacional (recuperação de senha). */
+  mailer: MailerPort;
   /**
    * Pausa entre envios consecutivos pelo MESMO chip no ciclo automático
    * (anti-spam do WhatsApp). Aplica-se apenas ao motor (runBillingCycle);
@@ -29,10 +32,16 @@ export interface AppDeps {
 const INTER_SEND_DELAY_MIN_MS = 5_000;
 const INTER_SEND_DELAY_MAX_MS = 15_000;
 
+let cachedMailer: MailerPort | undefined;
+
 export const defaultDeps: AppDeps = {
   gatewayFactory: buildGatewayAdapter,
   whatsappFactory: buildWhatsAppAdapter,
   platformBillingFactory: buildPlatformBilling,
+  // Lazy: o transporte SMTP só é montado no primeiro e-mail.
+  get mailer() {
+    return (cachedMailer ??= buildMailer());
+  },
   interSendDelay: () =>
     new Promise((resolve) =>
       setTimeout(

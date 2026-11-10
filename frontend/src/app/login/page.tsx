@@ -2,8 +2,9 @@
 
 /* eslint-disable @next/next/no-img-element */
 
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { Lock, ShieldCheck, Zap } from 'lucide-react';
 import { Button, Field, Input } from '@/components/ui';
 import { api, ApiError } from '@/lib/api';
@@ -38,6 +39,14 @@ export default function LoginPage() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  // Volta da redefinição de senha (window.location evita o Suspense do useSearchParams).
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get('senha') === 'redefinida') {
+      setNotice('Senha alterada. Entre com a nova senha.');
+    }
+  }, []);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -181,6 +190,20 @@ export default function LoginPage() {
                 required
               />
             </Field>
+            {mode === 'login' && (
+              <Link
+                href="/esqueci-senha"
+                className="-mt-2 self-end text-[13px] font-semibold text-primary-600 hover:text-primary-700"
+              >
+                Esqueci minha senha
+              </Link>
+            )}
+
+            {notice && !error && (
+              <p className="rounded-xl bg-leaf-50 px-3 py-2 text-sm text-leaf-700 ring-1 ring-inset ring-leaf-600/20">
+                {notice}
+              </p>
+            )}
 
             {error && (
               <p className="rounded-xl bg-danger-50 px-3 py-2 text-sm text-danger-700 ring-1 ring-inset ring-danger-100">
@@ -219,12 +242,6 @@ export default function LoginPage() {
             </p>
           </form>
 
-          <div className="rounded-2xl border border-sand-200 bg-white px-4 py-3 text-xs leading-relaxed text-sand-600">
-            <span className="font-bold text-sand-900">Conta demo</span> (rode{' '}
-            <code className="rounded bg-sand-50 px-1 py-0.5">npm run seed</code> no backend):{' '}
-            <span className="font-semibold">demo@cobrapramim.com</span> · senha{' '}
-            <span className="font-semibold">cobra123</span>
-          </div>
         </div>
       </section>
     </div>

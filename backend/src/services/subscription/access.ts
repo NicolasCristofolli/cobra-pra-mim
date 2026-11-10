@@ -13,7 +13,14 @@ export type SubscriptionStatus =
   | 'CANCELED';
 
 export type AccessState = 'FULL' | 'WARNING' | 'BLOCKED';
-export type AccessReason = 'OK' | 'TRIAL' | 'PAST_DUE' | 'NO_PLAN' | 'PENDING_PAYMENT' | 'EXPIRED';
+export type AccessReason =
+  | 'OK'
+  | 'ADMIN'
+  | 'TRIAL'
+  | 'PAST_DUE'
+  | 'NO_PLAN'
+  | 'PENDING_PAYMENT'
+  | 'EXPIRED';
 
 export interface Access {
   state: AccessState;
@@ -33,8 +40,12 @@ const DAY_MS = 86_400_000;
 
 export function resolveAccess(
   sub: SubscriptionForAccess | null,
-  now: Date = new Date()
+  now: Date = new Date(),
+  options: { admin?: boolean } = {}
 ): Access {
+  // Administrador da plataforma: acesso total, sem assinatura.
+  if (options.admin) return { state: 'FULL', reason: 'ADMIN', blocksAt: null };
+
   const blocked = (reason: AccessReason): Access => ({ state: 'BLOCKED', reason, blocksAt: null });
 
   if (!sub) return blocked('NO_PLAN');

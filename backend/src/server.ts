@@ -3,6 +3,7 @@ import { createApp } from './app';
 import { env } from './config/env';
 import { getPool } from './db';
 import { runMigrations } from './db/migrate';
+import { purgeOldResetTokens } from './modules/auth/auth.service';
 import { encrypt } from './lib/crypto';
 import { runBillingCycle } from './services/billing-engine';
 import { defaultDeps } from './services/deps';
@@ -32,6 +33,7 @@ async function start(): Promise<void> {
         try {
           const report = await runBillingCycle(defaultDeps);
           console.log('[motor] ciclo concluído:', report);
+          await purgeOldResetTokens();
         } catch (error) {
           console.error('[motor] ciclo falhou:', error);
         }

@@ -46,7 +46,7 @@ export function createApp(deps: AppDeps = defaultDeps): Express {
   app.use(requireSameOrigin);
 
   // Fora do gate de sessão.
-  app.use('/auth', authRouter());
+  app.use('/auth', authRouter(deps));
 
   // Assinatura: exige sessão, mas fica liberada para quem está bloqueado
   // (é por aqui que a pessoa escolhe o plano e paga).

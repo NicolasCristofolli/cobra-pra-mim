@@ -7,6 +7,7 @@ import { AppError, asyncHandler, notFound } from '../../lib/errors';
 import type { AppDeps } from '../../services/deps';
 import { resolveAccess } from '../../services/subscription/access';
 import {
+  findAccessByUser,
   findActivePlanByCode,
   findOpenPayment,
   findSubscriptionByUser,
@@ -54,7 +55,7 @@ export default function billingRouter(deps: AppDeps): Router {
       const sub = await findSubscriptionByUser(req.userId);
       const openPayment = sub ? await findOpenPayment(sub.id) : null;
       res.json({
-        access: resolveAccess(sub),
+        access: await findAccessByUser(req.userId),
         subscription: serializeSubscription(sub),
         openPayment: serializePayment(openPayment)
       });

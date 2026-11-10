@@ -64,8 +64,15 @@ export function findSubscriptionByUser(userId: string): Promise<SubscriptionWith
   return queryOne<SubscriptionWithPlan>(`${WITH_PLAN} WHERE s.user_id = $1`, [userId]);
 }
 
+export async function isAdmin(userId: string): Promise<boolean> {
+  const row = await queryOne<{ role: string }>('SELECT role FROM users WHERE id = $1', [userId]);
+  return row?.role === 'ADMIN';
+}
+
+/** Acesso do usuário: considera o papel (admin) e a assinatura. */
 export async function findAccessByUser(userId: string): Promise<Access> {
-  return resolveAccess(await findSubscriptionByUser(userId));
+  const [admin, sub] = await Promise.all([isAdmin(userId), findSubscriptionByUser(userId)]);
+  return resolveAccess(sub, new Date(), { admin });
 }
 
 /**

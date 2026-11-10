@@ -2,12 +2,13 @@ import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import { randomBytes } from 'node:crypto';
 import { query, queryOne, withTransaction } from '../../db';
-import { resolveAccess } from '../../services/subscription/access';
-import { findSubscriptionByUser } from '../../services/subscription/subscription.repo';
+import type { AppDeps } from '../../services/deps';
+import {
+  findAccessByUser,
+  findSubscriptionByUser
+} from '../../services/subscription/subscription.repo';
 import { serializeSubscription } from '../billing/billing.serializers';
 import { asyncHandler, AppError, unauthorized } from '../../lib/errors';
-import { encrypt } from '../../lib/crypto';
-import { DEFAULT_CHARGE_TEMPLATE, DEFAULT_PAID_TEMPLATE } from '../../lib/template';
 import {
   clearAuthCookie,
   noStore,
@@ -16,10 +17,20 @@ import {
   signToken
 } from '../../middleware/auth';
 import { createAuthLimiters } from '../../middleware/rate-limit';
-import { loginSchema, registerSchema } from './auth.schemas';
-
-/** Custo do bcrypt. Hashes antigos (10) sobem para 12 no próximo login. */
-const BCRYPT_COST = 12;
+import {
+  forgotPasswordSchema,
+  loginSchema,
+  registerSchema,
+  resetPasswordSchema
+} from './auth.schemas';
+import {
+  BCRYPT_COST,
+  createAccount,
+  hashPassword,
+  requestPasswordReset,
+  resetPassword,
+  type AccountRow
+} from './auth.service';
 
 /**
  * Hash de uma senha aleatória, comparado quando o e-mail não existe: o
@@ -28,13 +39,7 @@ const BCRYPT_COST = 12;
  */
 const DUMMY_HASH = bcrypt.hashSync(randomBytes(16).toString('hex'), BCRYPT_COST);
 
-interface UserRow {
-  id: string;
-  name: string;
-  email: string;
-  password_hash: string;
-  token_version: number;
-}
+type UserRow = AccountRow;
 
 const publicUser = (user: Pick<UserRow, 'id' | 'name' | 'email'>) => ({
   id: user.id,
@@ -42,7 +47,7 @@ const publicUser = (user: Pick<UserRow, 'id' | 'name' | 'email'>) => ({
   email: user.email
 });
 
-export default function authRouter(): Router {
+export default function authRouter(deps: Pick<AppDeps, 'mailer'>): Router {
   const router = Router();
   const limits = createAuthLimiters();
   router.use(noStore);
@@ -58,32 +63,10 @@ export default function authRouter(): Router {
       // limite de 5 cadastros/hora por rede torna a enumeração inviável em escala.
       if (existing) throw new AppError('Este e-mail já está cadastrado', 409, 'EMAIL_TAKEN');
 
-      const passwordHash = await bcrypt.hash(password, BCRYPT_COST);
-
-      const user = await withTransaction(async (tx) => {
-        // A conta nasce SEM assinatura: o acesso às rotas de negócio só libera
-        // depois de escolher o plano e o webhook do Asaas confirmar o pagamento.
-        const inserted = await tx.query<UserRow>(
-          `INSERT INTO users (name, email, password_hash)
-           VALUES ($1, $2, $3)
-           RETURNING id, name, email, password_hash, token_version`,
-          [name, email, passwordHash]
-        );
-        const created = inserted.rows[0]!;
-        // Onboarding: settings já nascem com templates padrão e um segredo de
-        // webhook exclusivo (criptografado em repouso).
-        await tx.query(
-          `INSERT INTO settings (user_id, webhook_secret_enc, message_template, paid_template)
-           VALUES ($1, $2, $3, $4)`,
-          [
-            created.id,
-            encrypt(randomBytes(24).toString('hex')),
-            DEFAULT_CHARGE_TEMPLATE,
-            DEFAULT_PAID_TEMPLATE
-          ]
-        );
-        return created;
-      });
+      const passwordHash = await hashPassword(password);
+      // A conta nasce SEM assinatura: o acesso às rotas de negócio só libera
+      // depois de escolher o plano e o webhook do Asaas confirmar o pagamento.
+      const user = await withTransaction((tx) => createAccount(tx, { name, email, passwordHash }));
 
       setAuthCookie(res, signToken(user.id, user.token_version));
       res.status(201).json(publicUser(user));
@@ -98,7 +81,7 @@ export default function authRouter(): Router {
       const { email, password } = loginSchema.parse(req.body);
 
       const user = await queryOne<UserRow>(
-        'SELECT id, name, email, password_hash, token_version FROM users WHERE email = $1',
+        'SELECT id, name, email, password_hash, token_version, role FROM users WHERE email = $1',
         [email]
       );
       // Sempre roda o bcrypt (tempo constante) e responde a mesma mensagem
@@ -107,12 +90,54 @@ export default function authRouter(): Router {
       if (!user || !valid) throw unauthorized('E-mail ou senha incorretos');
 
       if (bcrypt.getRounds(user.password_hash) < BCRYPT_COST) {
-        const upgraded = await bcrypt.hash(password, BCRYPT_COST);
+        const upgraded = await hashPassword(password);
         await query('UPDATE users SET password_hash = $1 WHERE id = $2', [upgraded, user.id]);
       }
 
       setAuthCookie(res, signToken(user.id, user.token_version));
       res.json(publicUser(user));
+    })
+  );
+
+  /**
+   * Passo 1 da recuperação: sempre responde igual (202), exista o e-mail ou
+   * não, e o envio roda depois da resposta para o tempo também não revelar nada.
+   */
+  router.post(
+    '/forgot-password',
+    limits.forgotByIp,
+    limits.forgotByAccount,
+    asyncHandler(async (req, res) => {
+      const { email } = forgotPasswordSchema.parse(req.body);
+      res.status(202).json({
+        ok: true,
+        message: 'Se este e-mail estiver cadastrado, você vai receber um link para criar uma nova senha.'
+      });
+      requestPasswordReset(deps.mailer, email, req.ip).catch((error) => {
+        console.error('[auth] falha ao enviar o e-mail de redefinição:', error);
+      });
+    })
+  );
+
+  /** Passo 2: nova senha com o token do e-mail. Derruba todas as sessões abertas. */
+  router.post(
+    '/reset-password',
+    limits.reset,
+    asyncHandler(async (req, res) => {
+      const { token, password } = resetPasswordSchema.parse(req.body);
+      const result = await resetPassword(token, password);
+      if (!result.ok) {
+        if (result.reason === 'PASSWORD_CONTAINS_EMAIL') {
+          throw new AppError('A senha não pode conter o seu e-mail', 400, 'WEAK_PASSWORD');
+        }
+        throw new AppError(
+          'Este link expirou ou já foi usado. Peça um novo em "Esqueci minha senha".',
+          400,
+          'INVALID_RESET_TOKEN'
+        );
+      }
+      clearAuthCookie(res);
+      res.json({ ok: true });
     })
   );
 
@@ -144,7 +169,7 @@ export default function authRouter(): Router {
       const subscription = await findSubscriptionByUser(user.id);
       res.json({
         ...publicUser(user),
-        access: resolveAccess(subscription),
+        access: await findAccessByUser(user.id),
         subscription: serializeSubscription(subscription)
       });
     })

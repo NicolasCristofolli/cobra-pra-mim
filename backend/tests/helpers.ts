@@ -9,6 +9,7 @@ import {
   DEFAULT_PAID_TEMPLATE
 } from '../src/lib/template';
 import type { AppDeps } from '../src/services/deps';
+import type { MailMessage } from '../src/services/mailer';
 import type {
   CreatePixChargeInput,
   CreatePixChargeResult
@@ -95,6 +96,8 @@ export interface PlatformCall {
 export interface TestHarness {
   app: ReturnType<typeof createApp>;
   deps: AppDeps;
+  /** E-mails "enviados" (recuperação de senha). */
+  sentEmails: MailMessage[];
   /** Chamadas ao Asaas da plataforma (checkout), em ordem. */
   platformCalls: PlatformCall[];
   sentMessages: SentMessage[];
@@ -107,6 +110,7 @@ export function buildTestApp(
   overrides: { withGateway?: boolean; withWhatsApp?: boolean; withPlatformBilling?: boolean } = {}
 ): TestHarness {
   const platformCalls: PlatformCall[] = [];
+  const sentEmails: MailMessage[] = [];
   let platformCounter = 0;
   const sentMessages: SentMessage[] = [];
   const gatewayCalls: CreatePixChargeInput[] = [];
@@ -114,6 +118,11 @@ export function buildTestApp(
   let pixCounter = 0;
 
   const deps: AppDeps = {
+    mailer: {
+      async send(message) {
+        sentEmails.push(message);
+      }
+    },
     platformBillingFactory: () =>
       overrides.withPlatformBilling === false
         ? null
@@ -176,6 +185,7 @@ export function buildTestApp(
   return {
     app: createApp(deps),
     deps,
+    sentEmails,
     platformCalls,
     sentMessages,
     gatewayCalls,

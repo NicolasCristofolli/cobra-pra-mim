@@ -27,6 +27,12 @@ function headlineFor(status: BillingStatus): Headline {
   const until = formatInstantDateBR(access.blocksAt);
 
   switch (access.reason) {
+    case 'ADMIN':
+      return {
+        tone: 'success',
+        title: 'Conta administradora',
+        text: 'Seu acesso é liberado sem assinatura. Os planos abaixo são os que os clientes veem.'
+      };
     case 'NO_PLAN':
       return {
         tone: 'neutral',

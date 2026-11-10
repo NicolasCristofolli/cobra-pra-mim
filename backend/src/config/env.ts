@@ -61,6 +61,23 @@ export const env = {
     if (this.isProd) return required('EVOLUTION_API_KEY');
     return process.env.EVOLUTION_API_KEY ?? 'cobra-evolution-local-key';
   },
+  // E-mail transacional (recuperação de senha). Sem SMTP_HOST, o e-mail
+  // vai para o log da API em vez de ser enviado.
+  get smtpHost() {
+    return process.env.SMTP_HOST || null;
+  },
+  get smtpPort() {
+    return Number(process.env.SMTP_PORT ?? 587);
+  },
+  get smtpUser() {
+    return process.env.SMTP_USER || null;
+  },
+  get smtpPass() {
+    return process.env.SMTP_PASS || null;
+  },
+  get mailFrom() {
+    return process.env.MAIL_FROM ?? 'Cobra pra mim <nao-responda@cobrapramim.cloud>';
+  },
   // Conta Asaas da PLATAFORMA (assinatura do SaaS). Sem ela, o checkout
   // responde 503 e nenhum pagamento novo é criado.
   get asaasPlatformApiKey() {

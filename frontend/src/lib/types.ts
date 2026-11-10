@@ -10,7 +10,7 @@ export type SubscriptionStatus =
 
 /** Decisão de acesso calculada pelo backend (services/subscription/access.ts). */
 export type AccessState = 'FULL' | 'WARNING' | 'BLOCKED';
-export type AccessReason = 'OK' | 'TRIAL' | 'PAST_DUE' | 'NO_PLAN' | 'PENDING_PAYMENT' | 'EXPIRED';
+export type AccessReason = 'OK' | 'ADMIN' | 'TRIAL' | 'PAST_DUE' | 'NO_PLAN' | 'PENDING_PAYMENT' | 'EXPIRED';
 
 export interface Access {
   state: AccessState;

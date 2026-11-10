@@ -69,6 +69,13 @@ Para ligar em produção:
 As contas que já existiam no deploy da migração 007 ganham 15 dias de cortesia
 (`TRIALING`).
 
+## Administradores e e-mail
+
+- Criar/promover admin (acesso sem assinatura), em `backend/`:
+  `ADMIN_NAME='Nome' ADMIN_EMAIL='x@y.com' ADMIN_PASSWORD='...' npm run create-admin`
+- Recuperação de senha: configure `SMTP_*` no `backend/.env`. Sem isso, o link
+  sai em `pm2 logs cobra-api` em vez de ir por e-mail.
+
 ## Backup fora da VPS
 
 Um backup que fica só na VPS some junto com ela. Faça as duas coisas:

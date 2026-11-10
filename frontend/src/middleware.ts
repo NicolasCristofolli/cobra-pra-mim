@@ -19,6 +19,9 @@ const AUTH_COOKIE = 'cpm_token';
 const API_URL = process.env.API_PROXY_TARGET ?? 'http://127.0.0.1:4000';
 const ACCESS_TIMEOUT_MS = 2_500;
 
+/** Páginas abertas sem login (recuperação de senha). */
+const PUBLIC_PAGES = ['/esqueci-senha', '/redefinir-senha'];
+
 /** Páginas que quem está bloqueado precisa para escolher o plano e pagar. */
 const BILLING_PAGES = ['/planos', '/checkout'];
 
@@ -61,6 +64,14 @@ function redirectTo(request: NextRequest, pathname: string, search?: Record<stri
 
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
+  // Recuperação de senha funciona logado ou não, sem consultar a API.
+  if (PUBLIC_PAGES.includes(pathname)) {
+    const response = NextResponse.next();
+    // O token do link não pode vazar para outros sites pelo Referer.
+    response.headers.set('Referrer-Policy', 'no-referrer');
+    return response;
+  }
+
   const token = request.cookies.get(AUTH_COOKIE)?.value;
   const isLoginPage = pathname === '/login';
   const isBillingPage = BILLING_PAGES.some((page) => pathname === page || pathname.startsWith(`${page}/`));

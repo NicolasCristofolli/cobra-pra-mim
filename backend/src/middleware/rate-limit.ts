@@ -70,6 +70,31 @@ export function createAuthLimiters() {
       message: tooMany('Muitas tentativas para esta conta. Aguarde 15 minutos ou redefina a senha.')
     }),
 
+    /** "Esqueci a senha" por IP: evita usar o sistema para mandar e-mail em massa. */
+    forgotByIp: limiter({
+      windowMs: 15 * 60_000,
+      limit: 5,
+      message: tooMany('Muitos pedidos de redefinição. Aguarde 15 minutos.')
+    }),
+
+    /** "Esqueci a senha" por e-mail: não enche a caixa de entrada de ninguém. */
+    forgotByAccount: limiter({
+      windowMs: 60 * 60_000,
+      limit: 3,
+      keyGenerator: (req: Request) => {
+        const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : '';
+        return `forgot:${email.slice(0, 254)}`;
+      },
+      message: tooMany('Já enviamos alguns links para este e-mail. Confira a caixa de entrada e o spam, ou tente em 1 hora.')
+    }),
+
+    /** Uso do token. Adivinhar um token de 256 bits é inviável, mas sem limite ninguém tenta. */
+    reset: limiter({
+      windowMs: 15 * 60_000,
+      limit: 10,
+      message: tooMany('Muitas tentativas. Aguarde 15 minutos.')
+    }),
+
     /** Cadastro: contas em massa / spam a partir do mesmo IP. */
     register: limiter({
       windowMs: 60 * 60_000,

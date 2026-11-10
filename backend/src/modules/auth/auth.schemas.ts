@@ -49,7 +49,7 @@ const loginPasswordSchema = z
   .min(1, 'Informe a senha')
   .max(256, 'Senha muito longa');
 
-const newPasswordSchema = z
+export const newPasswordSchema = z
   .string({ required_error: 'Informe a senha', invalid_type_error: 'Senha inválida' })
   .min(8, 'A senha precisa de pelo menos 8 caracteres')
   .refine((value) => Buffer.byteLength(value, 'utf8') <= BCRYPT_MAX_BYTES, 'A senha pode ter no máximo 72 caracteres')
@@ -87,3 +87,13 @@ export const registerSchema = z
       });
     }
   });
+
+export const forgotPasswordSchema = z.object({ email: emailSchema }).strict();
+
+export const resetPasswordSchema = z
+  .object({
+    // 32 bytes em base64url = 43 caracteres
+    token: z.string({ required_error: 'Link inválido' }).regex(/^[A-Za-z0-9_-]{43}$/, 'Link inválido ou incompleto'),
+    password: newPasswordSchema
+  })
+  .strict();
