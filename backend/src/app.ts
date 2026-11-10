@@ -5,8 +5,9 @@ import cookieParser from 'cookie-parser';
 import { env } from './config/env';
 import { errorHandler } from './middleware/error-handler';
 import { requireAuth } from './middleware/auth';
+import { requireSameOrigin } from './middleware/same-origin';
 import { loadAccess, requireActiveSubscription } from './middleware/subscription';
-import authRoutes from './modules/auth/auth.routes';
+import authRouter from './modules/auth/auth.routes';
 import billingRouter from './modules/billing/billing.routes';
 import platformWebhookRouter from './modules/billing/platform-webhook.routes';
 import clientsRoutes from './modules/clients/clients.routes';
@@ -27,6 +28,9 @@ export function createApp(deps: AppDeps = defaultDeps): Express {
   app.set('trust proxy', 1);
   app.use(helmet());
   app.use(cors({ origin: env.frontendOrigin, credentials: true }));
+  // Payload de auth é pequeno: limite menor ANTES do parser global (o
+  // primeiro parser que roda consome o corpo).
+  app.use('/auth', express.json({ limit: '10kb' }));
   app.use(express.json({ limit: '1mb' }));
   app.use(cookieParser());
 
@@ -34,10 +38,15 @@ export function createApp(deps: AppDeps = defaultDeps): Express {
     res.json({ ok: true, service: 'cobra-pra-mim-api' });
   });
 
-  // Fora do gate de sessão: auth e webhooks (chamados pelos gateways).
-  app.use('/auth', authRoutes);
+  // Webhooks: chamados servidor a servidor pelos gateways (token próprio).
   app.use('/webhooks/platform', platformWebhookRouter());
   app.use('/webhooks', webhooksRouter(deps));
+
+  // Daqui em diante, POST/PUT/PATCH/DELETE com Origin de outro site = 403.
+  app.use(requireSameOrigin);
+
+  // Fora do gate de sessão.
+  app.use('/auth', authRouter());
 
   // Assinatura: exige sessão, mas fica liberada para quem está bloqueado
   // (é por aqui que a pessoa escolhe o plano e paga).

@@ -150,6 +150,7 @@ export default function LoginPage() {
                   onChange={(event) => setName(event.target.value)}
                   placeholder="Maria Empreendedora"
                   autoComplete="name"
+                  maxLength={80}
                   required
                 />
               </Field>
@@ -161,12 +162,13 @@ export default function LoginPage() {
                 onChange={(event) => setEmail(event.target.value)}
                 placeholder="voce@empresa.com"
                 autoComplete="email"
+                maxLength={254}
                 required
               />
             </Field>
             <Field
               label="Senha"
-              hint={mode === 'register' ? 'Mínimo de 8 caracteres.' : undefined}
+              hint={mode === 'register' ? 'De 8 a 72 caracteres, com letras e números.' : undefined}
             >
               <Input
                 type="password"
@@ -174,7 +176,8 @@ export default function LoginPage() {
                 onChange={(event) => setPassword(event.target.value)}
                 placeholder="••••••••"
                 autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
-                minLength={8}
+                minLength={mode === 'register' ? 8 : undefined}
+                maxLength={mode === 'register' ? 72 : 256}
                 required
               />
             </Field>

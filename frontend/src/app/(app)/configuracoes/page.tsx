@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { BookOpen, Copy, KeyRound, QrCode, RefreshCw, Unplug, Webhook } from 'lucide-react';
 import { useToast } from '@/components/toast';
+import { SecurityCard } from '@/components/security-card';
 import {
   Button,
   Card,
@@ -439,6 +440,8 @@ export default function ConfiguracoesPage() {
           <KeyRound className="h-4 w-4" /> Salvar alterações
         </Button>
       </div>
+
+      <SecurityCard />
 
       <ConfirmDialog
         open={rotateOpen}

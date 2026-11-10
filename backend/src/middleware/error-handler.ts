@@ -24,6 +24,17 @@ export function errorHandler(
     return;
   }
 
+  // Erros do body-parser: não viram 500 nem ecoam o corpo recebido.
+  const parserError = error as { type?: string };
+  if (parserError?.type === 'entity.too.large') {
+    res.status(413).json({ error: 'Dados enviados são grandes demais' });
+    return;
+  }
+  if (parserError?.type === 'entity.parse.failed' || parserError?.type === 'encoding.unsupported') {
+    res.status(400).json({ error: 'JSON inválido' });
+    return;
+  }
+
   if (error instanceof AppError) {
     res.status(error.status).json({ error: error.message, code: error.code });
     return;

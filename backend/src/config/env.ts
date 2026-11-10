@@ -30,7 +30,12 @@ export const env = {
     return required('DATABASE_URL');
   },
   get jwtSecret() {
-    return required('JWT_SECRET');
+    const secret = required('JWT_SECRET');
+    // HS256 com segredo curto cai em força bruta offline a partir de um token.
+    if (secret.length < 32) {
+      throw new Error('JWT_SECRET precisa ter pelo menos 32 caracteres. Gere com: openssl rand -base64 48');
+    }
+    return secret;
   },
   get encryptionKey() {
     return required('ENCRYPTION_KEY');
