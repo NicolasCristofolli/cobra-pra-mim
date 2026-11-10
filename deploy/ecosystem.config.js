@@ -30,7 +30,9 @@ module.exports = {
       name: 'cobra-web',
       cwd: path.join(root, 'frontend'),
       script: 'node_modules/next/dist/bin/next',
-      args: 'start -H 127.0.0.1 -p 3000',
+      // Sem -H: com -H 127.0.0.1 o Next monta os redirects do middleware como
+      // https://localhost:3000/... A porta 3000 fica fechada pelo UFW.
+      args: 'start -p 3000',
       exec_mode: 'fork',
       env: {
         NODE_ENV: 'production',
