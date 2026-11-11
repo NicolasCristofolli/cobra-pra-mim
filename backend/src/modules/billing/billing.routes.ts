@@ -5,6 +5,7 @@ import { isValidCpfCnpj } from '../../lib/document';
 import { todayISO } from '../../lib/dates';
 import { AppError, asyncHandler, notFound } from '../../lib/errors';
 import type { AppDeps } from '../../services/deps';
+import { requireVerifiedEmail } from '../../middleware/auth';
 import { resolveAccess } from '../../services/subscription/access';
 import {
   findAccessByUser,
@@ -46,7 +47,7 @@ export default function billingRouter(deps: AppDeps): Router {
 
   // Leve: usado pelo middleware do Next.js a cada navegação.
   router.get('/access', (req, res) => {
-    res.json(req.access);
+    res.json({ ...req.access, emailVerified: req.emailVerified });
   });
 
   router.get(
@@ -69,6 +70,7 @@ export default function billingRouter(deps: AppDeps): Router {
    */
   router.post(
     '/checkout',
+    requireVerifiedEmail,
     asyncHandler(async (req, res) => {
       const { planCode, cpfCnpj } = checkoutSchema.parse(req.body);
       const platform = deps.platformBillingFactory();

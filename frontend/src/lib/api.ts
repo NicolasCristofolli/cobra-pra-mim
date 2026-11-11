@@ -51,6 +51,14 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
   }
 
   const body = await response.json().catch(() => ({}));
+
+  // 403 EMAIL_NOT_VERIFIED: cadastro ainda sem o e-mail confirmado.
+  if (response.status === 403 && (body as { code?: string }).code === 'EMAIL_NOT_VERIFIED') {
+    if (typeof window !== 'undefined' && !window.location.pathname.startsWith('/confirmar-email')) {
+      window.location.href = '/confirmar-email';
+    }
+  }
+
   if (!response.ok) {
     throw new ApiError(
       (body as { error?: string }).error ?? 'Erro inesperado',

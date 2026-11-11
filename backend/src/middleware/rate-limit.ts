@@ -95,6 +95,14 @@ export function createAuthLimiters() {
       message: tooMany('Muitas tentativas. Aguarde 15 minutos.')
     }),
 
+    /** Reenvio da confirmação, por conta (a rota exige login). */
+    resendVerification: limiter({
+      windowMs: 60 * 60_000,
+      limit: 5,
+      keyGenerator: (req: Request) => `verify:${req.userId ?? ipKey(req.ip)}`,
+      message: tooMany('Já enviamos alguns e-mails de confirmação. Confira a caixa de entrada e o spam, ou tente em 1 hora.')
+    }),
+
     /** Cadastro: contas em massa / spam a partir do mesmo IP. */
     register: limiter({
       windowMs: 60 * 60_000,

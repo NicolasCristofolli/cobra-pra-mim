@@ -4,8 +4,9 @@ import { NextRequest, NextResponse } from 'next/server';
  * Proteção de rotas (roda no servidor a cada navegação):
  *  1. sem cookie de sessão          -> /login
  *  2. sessão inválida/expirada       -> apaga o cookie e manda para /login
- *  3. assinatura BLOQUEADA           -> /planos (exceto as páginas de pagamento)
- *  4. assinatura em atraso (WARNING) -> página abre normalmente, o layout mostra o aviso
+ *  3. e-mail não confirmado         -> /confirmar-email
+ *  4. assinatura BLOQUEADA           -> /planos (exceto as páginas de pagamento)
+ *  5. assinatura em atraso (WARNING) -> página abre normalmente, o layout mostra o aviso
  *
  * A fonte da verdade continua sendo o backend: toda rota de negócio da API
  * responde 402 para assinatura bloqueada, e o 401/402 também é tratado no
@@ -19,8 +20,14 @@ const AUTH_COOKIE = 'cpm_token';
 const API_URL = process.env.API_PROXY_TARGET ?? 'http://127.0.0.1:4000';
 const ACCESS_TIMEOUT_MS = 2_500;
 
-/** Páginas abertas sem login (recuperação de senha). */
-const PUBLIC_PAGES = ['/esqueci-senha', '/redefinir-senha'];
+/**
+ * Páginas abertas sem login: recuperação de senha e confirmação de e-mail
+ * (o link do e-mail pode ser aberto em outro aparelho, sem sessão).
+ */
+const PUBLIC_PAGES = ['/esqueci-senha', '/redefinir-senha', '/confirmar-email'];
+
+/** Para onde vai quem ainda não confirmou o e-mail. */
+const VERIFY_PAGE = '/confirmar-email';
 
 /** Páginas que quem está bloqueado precisa para escolher o plano e pagar. */
 const BILLING_PAGES = ['/planos', '/checkout'];
@@ -29,6 +36,8 @@ type AccessState = 'FULL' | 'WARNING' | 'BLOCKED';
 interface Access {
   state: AccessState;
   reason: string;
+  /** false = cadastro sem e-mail confirmado: só a página de confirmação abre. */
+  emailVerified?: boolean;
 }
 
 type AccessResult = { kind: 'ok'; access: Access } | { kind: 'unauthenticated' } | { kind: 'unknown' };
@@ -95,6 +104,10 @@ export async function middleware(request: NextRequest) {
 
   const { access } = result;
   const blocked = access.state === 'BLOCKED';
+
+  if (access.emailVerified === false) {
+    return redirectTo(request, VERIFY_PAGE);
+  }
 
   if (isLoginPage) {
     return redirectTo(request, blocked ? '/planos' : '/dashboard');

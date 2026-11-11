@@ -4,7 +4,7 @@ import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import { env } from './config/env';
 import { errorHandler } from './middleware/error-handler';
-import { requireAuth } from './middleware/auth';
+import { requireAuth, requireVerifiedEmail } from './middleware/auth';
 import { requireSameOrigin } from './middleware/same-origin';
 import { loadAccess, requireActiveSubscription } from './middleware/subscription';
 import authRouter from './modules/auth/auth.routes';
@@ -54,7 +54,7 @@ export function createApp(deps: AppDeps = defaultDeps): Express {
   app.use('/billing', session, billingRouter(deps));
 
   // Rotas de negócio: sessão válida E assinatura que libere acesso (senão 402).
-  const paid = [...session, requireActiveSubscription];
+  const paid = [...session, requireVerifiedEmail, requireActiveSubscription];
   app.use('/clients', paid, clientsRoutes);
   app.use('/charges', paid, chargesRouter(deps));
   app.use('/dashboard', paid, dashboardRoutes);

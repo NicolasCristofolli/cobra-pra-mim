@@ -33,8 +33,9 @@ export async function createAccount(
   input: { name: string; email: string; passwordHash: string; role?: Role }
 ): Promise<AccountRow> {
   const inserted = await tx.query<AccountRow>(
-    `INSERT INTO users (name, email, password_hash, role)
-     VALUES ($1, $2, $3, $4)
+    // Admin é criado pelo script do servidor: o e-mail já nasce confirmado.
+    `INSERT INTO users (name, email, password_hash, role, email_verified_at)
+     VALUES ($1, $2, $3, $4, CASE WHEN $4 = 'ADMIN' THEN now() END)
      RETURNING id, name, email, password_hash, token_version, role`,
     [input.name, input.email, input.passwordHash, input.role ?? 'USER']
   );
@@ -135,7 +136,12 @@ export async function resetPassword(token: string, newPassword: string): Promise
     }
 
     await tx.query(
-      `UPDATE users SET password_hash = $1, token_version = token_version + 1 WHERE id = $2`,
+      // Abrir o link do e-mail prova que a pessoa é dona dele: confirma o
+      // e-mail também (resolve quem cadastrou um e-mail alheio antes do dono).
+      `UPDATE users
+          SET password_hash = $1, token_version = token_version + 1,
+              email_verified_at = COALESCE(email_verified_at, now())
+        WHERE id = $2`,
       [await hashPassword(newPassword), row.user_id]
     );
     await tx.query(
@@ -146,7 +152,82 @@ export async function resetPassword(token: string, newPassword: string): Promise
   });
 }
 
+/* ---------------- Confirmação de e-mail ---------------- */
+
+const VERIFY_TTL_HOURS = 48;
+
+/**
+ * Gera o link de confirmação e envia por e-mail. Um envio novo invalida os
+ * links anteriores. Não faz nada se o e-mail já estiver confirmado.
+ */
+export async function sendEmailVerification(mailer: MailerPort, userId: string): Promise<void> {
+  const user = await queryOne<Pick<AccountRow, 'id' | 'name' | 'email'>>(
+    'SELECT id, name, email FROM users WHERE id = $1 AND email_verified_at IS NULL',
+    [userId]
+  );
+  if (!user) return;
+
+  const token = randomBytes(32).toString('base64url');
+  await withTransaction(async (tx) => {
+    await tx.query(
+      'UPDATE email_verification_tokens SET used_at = now() WHERE user_id = $1 AND used_at IS NULL',
+      [user.id]
+    );
+    await tx.query(
+      `INSERT INTO email_verification_tokens (user_id, token_hash, expires_at)
+       VALUES ($1, $2, now() + ($3 * interval '1 hour'))`,
+      [user.id, sha256(token), VERIFY_TTL_HOURS]
+    );
+  });
+
+  const link = `${env.frontendOrigin.replace(/\/$/, '')}/confirmar-email?token=${token}`;
+  const firstName = user.name.split(' ')[0] ?? user.name;
+  await mailer.send({
+    to: user.email,
+    subject: 'Confirme seu e-mail — Cobra pra mim',
+    text:
+      `Olá, ${firstName}!\n\n` +
+      `Falta só confirmar seu e-mail para ativar sua conta no Cobra pra mim.\n` +
+      `Abra o link abaixo em até ${VERIFY_TTL_HOURS} horas:\n\n${link}\n\n` +
+      `Se você não criou uma conta, ignore este e-mail.`,
+    html:
+      `<p>Olá, ${escapeHtml(firstName)}!</p>` +
+      `<p>Falta só confirmar seu e-mail para ativar sua conta no Cobra pra mim.</p>` +
+      `<p><a href="${link}" style="display:inline-block;padding:12px 20px;background:#3545bc;color:#fff;` +
+      `border-radius:10px;text-decoration:none;font-weight:600">Confirmar e-mail</a></p>` +
+      `<p style="color:#666">O link vale por ${VERIFY_TTL_HOURS} horas.<br>` +
+      `Se você não criou uma conta, ignore este e-mail.</p>`
+  });
+}
+
+/**
+ * Confirma o e-mail com um token válido. Não exige estar logado: o link pode
+ * ser aberto em outro aparelho. Devolve false para token inválido/expirado.
+ */
+export async function verifyEmail(token: string): Promise<boolean> {
+  return withTransaction(async (tx) => {
+    const found = await tx.query<{ user_id: string }>(
+      `SELECT user_id FROM email_verification_tokens
+        WHERE token_hash = $1 AND used_at IS NULL AND expires_at > now()
+        FOR UPDATE`,
+      [sha256(token)]
+    );
+    const row = found.rows[0];
+    if (!row) return false;
+    await tx.query(
+      'UPDATE users SET email_verified_at = COALESCE(email_verified_at, now()) WHERE id = $1',
+      [row.user_id]
+    );
+    await tx.query(
+      'UPDATE email_verification_tokens SET used_at = now() WHERE user_id = $1 AND used_at IS NULL',
+      [row.user_id]
+    );
+    return true;
+  });
+}
+
 /** Limpeza: tokens com mais de 7 dias não servem para nada. */
 export async function purgeOldResetTokens(): Promise<void> {
   await query(`DELETE FROM password_reset_tokens WHERE created_at < now() - interval '7 days'`);
+  await query(`DELETE FROM email_verification_tokens WHERE created_at < now() - interval '7 days'`);
 }

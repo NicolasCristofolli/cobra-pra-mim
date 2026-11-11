@@ -16,9 +16,19 @@ import type {
 } from '../src/services/gateway';
 
 export async function truncateAll(): Promise<void> {
-  await query(
-    'TRUNCATE notification_logs, charges, settings, clients, platform_webhook_events, users CASCADE'
-  );
+  // E-mails (confirmação, redefinição) são gerados depois da resposta HTTP e
+  // podem ainda estar gravando o token quando o próximo teste limpa o banco.
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await query(
+        'TRUNCATE notification_logs, charges, settings, clients, platform_webhook_events, users CASCADE'
+      );
+      return;
+    } catch (error) {
+      if ((error as { code?: string }).code !== '40P01' || attempt >= 5) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  }
 }
 
 export interface TestUser {
@@ -37,6 +47,8 @@ export async function createUser(
     webhookSecret?: string;
     /** Padrão ACTIVE: os testes de negócio não querem esbarrar no 402. */
     subscription?: TestSubscription;
+    /** Padrão true: só os testes de confirmação querem e-mail pendente. */
+    emailVerified?: boolean;
   } = {}
 ): Promise<TestUser> {
   const email = options.email ?? `user-${randomUUID().slice(0, 8)}@test.dev`;
@@ -44,9 +56,9 @@ export async function createUser(
   const webhookSecret = options.webhookSecret ?? `whsec_${randomUUID().slice(0, 12)}`;
 
   const row = await queryOne<{ id: string }>(
-    `INSERT INTO users (name, email, password_hash)
-     VALUES ($1, $2, $3) RETURNING id`,
-    ['Usuário Teste', email, await bcrypt.hash(password, 4)]
+    `INSERT INTO users (name, email, password_hash, email_verified_at)
+     VALUES ($1, $2, $3, CASE WHEN $4 THEN now() END) RETURNING id`,
+    ['Usuário Teste', email, await bcrypt.hash(password, 4), options.emailVerified !== false]
   );
   const id = row!.id;
 

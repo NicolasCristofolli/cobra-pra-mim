@@ -97,3 +97,9 @@ export const resetPasswordSchema = z
     password: newPasswordSchema
   })
   .strict();
+
+export const verifyEmailSchema = z
+  .object({
+    token: z.string({ required_error: 'Link inválido' }).regex(/^[A-Za-z0-9_-]{43}$/, 'Link inválido ou incompleto')
+  })
+  .strict();

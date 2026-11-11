@@ -21,7 +21,8 @@ import {
   forgotPasswordSchema,
   loginSchema,
   registerSchema,
-  resetPasswordSchema
+  resetPasswordSchema,
+  verifyEmailSchema
 } from './auth.schemas';
 import {
   BCRYPT_COST,
@@ -29,6 +30,8 @@ import {
   hashPassword,
   requestPasswordReset,
   resetPassword,
+  sendEmailVerification,
+  verifyEmail,
   type AccountRow
 } from './auth.service';
 
@@ -69,7 +72,11 @@ export default function authRouter(deps: Pick<AppDeps, 'mailer'>): Router {
       const user = await withTransaction((tx) => createAccount(tx, { name, email, passwordHash }));
 
       setAuthCookie(res, signToken(user.id, user.token_version));
-      res.status(201).json(publicUser(user));
+      res.status(201).json({ ...publicUser(user), emailVerified: false });
+      // Envio depois da resposta: SMTP lento não trava o cadastro.
+      sendEmailVerification(deps.mailer, user.id).catch((error) => {
+        console.error('[auth] falha ao enviar o e-mail de confirmação:', error);
+      });
     })
   );
 
@@ -141,6 +148,38 @@ export default function authRouter(deps: Pick<AppDeps, 'mailer'>): Router {
     })
   );
 
+  /** Confirma o e-mail pelo link. Funciona sem login (link aberto em outro aparelho). */
+  router.post(
+    '/verify-email',
+    limits.reset,
+    asyncHandler(async (req, res) => {
+      const { token } = verifyEmailSchema.parse(req.body);
+      if (!(await verifyEmail(token))) {
+        throw new AppError(
+          'Este link expirou ou já foi usado. Entre na sua conta e peça um novo.',
+          400,
+          'INVALID_VERIFY_TOKEN'
+        );
+      }
+      res.json({ ok: true });
+    })
+  );
+
+  /** Reenvia o link de confirmação para o e-mail da conta logada. */
+  router.post(
+    '/resend-verification',
+    requireAuth,
+    limits.resendVerification,
+    asyncHandler(async (req, res) => {
+      if (req.emailVerified) {
+        res.json({ ok: true, alreadyVerified: true });
+        return;
+      }
+      await sendEmailVerification(deps.mailer, req.userId);
+      res.status(202).json({ ok: true });
+    })
+  );
+
   router.post('/logout', (_req, res) => {
     clearAuthCookie(res);
     res.json({ ok: true });
@@ -169,6 +208,7 @@ export default function authRouter(deps: Pick<AppDeps, 'mailer'>): Router {
       const subscription = await findSubscriptionByUser(user.id);
       res.json({
         ...publicUser(user),
+        emailVerified: req.emailVerified,
         access: await findAccessByUser(user.id),
         subscription: serializeSubscription(subscription)
       });

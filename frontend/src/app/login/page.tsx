@@ -64,9 +64,9 @@ export default function LoginPage() {
           body: JSON.stringify({ name, email, password })
         });
       }
-      // Conta nova não tem plano: vai direto escolher (passo 1 do fluxo).
-      // No login, o middleware decide entre o painel e /planos.
-      router.replace(mode === 'register' ? '/planos' : '/dashboard');
+      // Cadastro: primeiro confirma o e-mail, depois escolhe o plano.
+      // No login, o middleware decide entre o painel, /planos e /confirmar-email.
+      router.replace(mode === 'register' ? '/confirmar-email' : '/dashboard');
     } catch (err) {
       if (err instanceof ApiError) {
         const details = err.issues?.map((issue) => issue.message).join(' · ');

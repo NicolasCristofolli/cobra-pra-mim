@@ -26,6 +26,8 @@ declare global {
   namespace Express {
     interface Request {
       userId: string;
+      /** users.email_verified_at preenchido. Carregado pelo requireAuth. */
+      emailVerified: boolean;
     }
   }
 }
@@ -91,16 +93,34 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
     return next(unauthorized('Sessão inválida ou expirada'));
   }
 
-  queryOne<{ token_version: number }>('SELECT token_version FROM users WHERE id = $1', [payload.sub])
+  queryOne<{ token_version: number; email_verified: boolean }>(
+    'SELECT token_version, email_verified_at IS NOT NULL AS email_verified FROM users WHERE id = $1',
+    [payload.sub]
+  )
     .then((user) => {
       if (!user || user.token_version !== payload.tv) {
         clearAuthCookie(res);
         return next(unauthorized('Sessão encerrada. Entre novamente.'));
       }
       req.userId = payload.sub;
+      req.emailVerified = user.email_verified;
       next();
     })
     .catch(next);
+}
+
+/**
+ * Bloqueia com 403 quem ainda não confirmou o e-mail (vem depois do
+ * requireAuth). Sem isso, dava para assinar e usar o painel com um e-mail
+ * que não existe, e o "esqueci minha senha" nunca chegaria.
+ */
+export function requireVerifiedEmail(req: Request, res: Response, next: NextFunction): void {
+  if (req.emailVerified) return next();
+  res.status(403).json({
+    error: 'Confirme seu e-mail para continuar. Enviamos um link para a sua caixa de entrada.',
+    code: 'EMAIL_NOT_VERIFIED',
+    redirectTo: '/confirmar-email'
+  });
 }
 
 /** Respostas de autenticação nunca vão para cache (navegador, proxy, CDN). */

@@ -49,7 +49,12 @@ describe('validação e sanitização (Zod)', () => {
       password: GOOD_PASSWORD
     });
     expect(response.status).toBe(201);
-    expect(response.body).toEqual({ id: expect.any(String), name: 'Maria Empreendedora', email: 'maria.silva@example.com' });
+    expect(response.body).toEqual({
+      id: expect.any(String),
+      name: 'Maria Empreendedora',
+      email: 'maria.silva@example.com',
+      emailVerified: false
+    });
     expect(JSON.stringify(response.body)).not.toMatch(/password|hash|token/i);
   });
 
