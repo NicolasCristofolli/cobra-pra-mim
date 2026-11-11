@@ -1,67 +1,72 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { Client } from 'pg'; // Mudamos de Pool para Client direto
+import { Client } from 'pg';
 
+// Chave arbitrária do advisory lock: duas instâncias subindo ao mesmo tempo
+// não aplicam a mesma migration em paralelo.
+const MIGRATION_LOCK_KEY = 823_417_001;
+
+/**
+ * Aplica as migrations pendentes de db/migrations, em ordem de nome.
+ *
+ * Cada arquivo roda inteiro dentro de UMA transação, junto com o registro em
+ * schema_migrations: se um comando falhar, nada daquele arquivo fica aplicado
+ * e o próximo boot tenta de novo do zero (antes, uma falha no meio deixava o
+ * banco meio migrado e o boot seguinte quebrava em "already exists").
+ *
+ * O arquivo é enviado como um único comando multi-statement, então
+ * ponto-e-vírgula em comentários ou strings não é mais problema.
+ */
 export async function runMigrations(): Promise<string[]> {
-  // Criamos um cliente direto configurando timeouts e forçando IPv4 puro
   const client = new Client({
     connectionString: process.env.DATABASE_URL,
     ssl: false,
-    connectionTimeoutMillis: 5000, // Dá tempo para o WSL responder
+    connectionTimeoutMillis: 5000
   });
-
-  // Abre a conexão explicitamente
   await client.connect();
 
-  // Garante a tabela de controle direto
-  await client.query(
-    `CREATE TABLE IF NOT EXISTS schema_migrations (
-       name TEXT PRIMARY KEY,
-       run_at TIMESTAMPTZ NOT NULL DEFAULT now()
-     )`
-  );
-
-  const dir = path.resolve(__dirname, '../../db/migrations');
-  const files = fs
-    .readdirSync(dir)
-    .filter((f) => f.endsWith('.sql'))
-    .sort();
-
   const applied: string[] = [];
-
-  for (const file of files) {
-    const { rows } = await client.query(
-      'SELECT 1 FROM schema_migrations WHERE name = $1',
-      [file]
+  try {
+    await client.query('SELECT pg_advisory_lock($1)', [MIGRATION_LOCK_KEY]);
+    await client.query(
+      `CREATE TABLE IF NOT EXISTS schema_migrations (
+         name TEXT PRIMARY KEY,
+         run_at TIMESTAMPTZ NOT NULL DEFAULT now()
+       )`
     );
-    if (rows.length > 0) continue;
+    await client.query('CREATE EXTENSION IF NOT EXISTS "pgcrypto"');
 
-    const sql = fs.readFileSync(path.join(dir, file), 'utf8');
+    const dir = path.resolve(__dirname, '../../db/migrations');
+    const files = fs
+      .readdirSync(dir)
+      .filter((f) => f.endsWith('.sql'))
+      .sort();
 
-    try {
-      await client.query('CREATE EXTENSION IF NOT EXISTS "pgcrypto";');
+    const done = new Set(
+      (await client.query<{ name: string }>('SELECT name FROM schema_migrations')).rows.map(
+        (row) => row.name
+      )
+    );
 
-      const commands = sql
-        .split(';')
-        .map((cmd) => cmd.trim())
-        .filter((cmd) => cmd.length > 0);
-
-      for (const command of commands) {
-        console.log("👉 EXECUTANDO COMANDO:", command.substring(0, 60) + "...");
-        await client.query(command);
+    for (const file of files) {
+      if (done.has(file)) continue;
+      const sql = fs.readFileSync(path.join(dir, file), 'utf8');
+      try {
+        await client.query('BEGIN');
+        await client.query(sql);
+        await client.query('INSERT INTO schema_migrations (name) VALUES ($1)', [file]);
+        await client.query('COMMIT');
+        applied.push(file);
+      } catch (error) {
+        await client.query('ROLLBACK').catch(() => undefined);
+        console.error(`[db] erro ao aplicar a migration ${file} (nada dela foi aplicado):`, error);
+        throw error;
       }
-      
-      await client.query('INSERT INTO schema_migrations (name) VALUES ($1)', [file]);
-      applied.push(file);
-      
-    } catch (error) {
-      console.error(`🚨 Erro ao aplicar comando no arquivo [${file}]:`, error);
-      throw error;
     }
+  } finally {
+    // Encerrar a conexão também libera o advisory lock.
+    await client.end().catch(() => undefined);
   }
-
-  // Fecha a conexão do cliente manualmente no fim de tudo
-  await client.end();
   return applied;
 }
 

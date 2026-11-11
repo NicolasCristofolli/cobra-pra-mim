@@ -26,7 +26,7 @@ import {
 import { api } from '@/lib/api';
 import { formatBRL } from '@/lib/format';
 import { useUser } from '@/components/user-context';
-import type { CashflowPoint, Charge, ChargeList, Client, Metrics } from '@/lib/types';
+import type { CashflowPoint, Charge, Metrics } from '@/lib/types';
 
 interface StatusTotals {
   paid: number;
@@ -62,26 +62,25 @@ export default function DashboardPage() {
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const load = useCallback(async () => {
-    const countOf = (status: string) =>
-      api<ChargeList>(`/charges?status=${status}&page=1&pageSize=1`).then((list) => list.total);
-    const [metricsData, cashflowData, dueTodayData, clientsData, paid, pending, overdue] =
-      await Promise.all([
-        api<Metrics>('/dashboard/metrics'),
-        api<CashflowPoint[]>('/dashboard/cashflow?days=14'),
-        api<Charge[]>('/dashboard/due-today'),
-        api<Client[]>('/clients'),
-        countOf('PAID'),
-        countOf('PENDING'),
-        countOf('OVERDUE')
-      ]);
+    // As contagens (faturas por situação, clientes) vêm prontas em /metrics:
+    // 3 requisições em vez de 7, sem baixar a lista inteira de clientes.
+    const [metricsData, cashflowData, dueTodayData] = await Promise.all([
+      api<Metrics>('/dashboard/metrics'),
+      api<CashflowPoint[]>('/dashboard/cashflow?days=14'),
+      api<Charge[]>('/dashboard/due-today')
+    ]);
     setMetrics(metricsData);
     setCashflow(cashflowData);
     setDueToday(dueTodayData);
     setClientTotals({
-      total: clientsData.length,
-      inadimplentes: clientsData.filter((client) => client.status === 'INADIMPLENTE').length
+      total: metricsData.clientsTotal,
+      inadimplentes: metricsData.clientsOverdue
     });
-    setStatusTotals({ paid, pending, overdue });
+    setStatusTotals({
+      paid: metricsData.statusCounts.paid,
+      pending: metricsData.statusCounts.open,
+      overdue: metricsData.statusCounts.overdue
+    });
   }, []);
 
   useEffect(() => {
@@ -103,8 +102,16 @@ export default function DashboardPage() {
         /* mensagens de heartbeat são ignoradas */
       }
     };
+    source.onopen = () => {
+      // Stream de volta (ex.: depois de um deploy): o polling não é mais necessário.
+      if (pollRef.current) {
+        clearInterval(pollRef.current);
+        pollRef.current = null;
+      }
+    };
     source.onerror = () => {
-      source.close();
+      // Não fecha o stream: o EventSource reconecta sozinho. Enquanto isso,
+      // o painel se atualiza por polling.
       if (!pollRef.current) {
         pollRef.current = setInterval(() => load().catch(() => undefined), 30_000);
       }
@@ -112,6 +119,7 @@ export default function DashboardPage() {
     return () => {
       source.close();
       if (pollRef.current) clearInterval(pollRef.current);
+      pollRef.current = null;
     };
   }, [load, push]);
 

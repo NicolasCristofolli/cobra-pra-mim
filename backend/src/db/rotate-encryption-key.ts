@@ -43,20 +43,30 @@ async function main(): Promise<void> {
   try {
     await client.query('BEGIN');
     const { rows } = await client.query<Record<string, string | null>>(
-      `SELECT ctid::text AS _ctid, ${ENC_COLUMNS.join(', ')} FROM settings FOR UPDATE`
+      `SELECT id, ${ENC_COLUMNS.join(', ')} FROM settings FOR UPDATE`
     );
     for (const row of rows) {
+      // UM update por linha, pela chave primária. (Atualizar coluna a coluna
+      // por ctid não funciona: o ctid muda depois do primeiro UPDATE e os
+      // seguintes não encontram mais a linha.)
+      const sets: string[] = [];
+      const values: unknown[] = [row.id];
       for (const column of ENC_COLUMNS) {
         const value = row[column];
         if (!value) continue;
         const plain = await withKey(oldKey, () => decrypt(value));
-        const reencrypted = await withKey(newKey, () => encrypt(plain));
-        await client.query(`UPDATE settings SET ${column} = $1 WHERE ctid = $2::tid`, [
-          reencrypted,
-          row._ctid
-        ]);
-        updated += 1;
+        values.push(await withKey(newKey, () => encrypt(plain)));
+        sets.push(`${column} = $${values.length}`);
       }
+      if (sets.length === 0) continue;
+      const result = await client.query(
+        `UPDATE settings SET ${sets.join(', ')} WHERE id = $1`,
+        values
+      );
+      if (result.rowCount !== 1) {
+        throw new Error(`settings ${row.id}: esperava atualizar 1 linha, atualizou ${result.rowCount}`);
+      }
+      updated += sets.length;
     }
     await client.query('COMMIT');
   } catch (error) {

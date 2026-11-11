@@ -26,6 +26,23 @@ export interface CycleReport {
   blockedSkipped: number; // faturas de usuários com assinatura bloqueada (não enviadas)
 }
 
+/** Quantos usuários (chips) o ciclo notifica ao mesmo tempo. */
+const NOTIFY_CONCURRENCY = 5;
+
+let stopRequested = false;
+let runningCycle: Promise<unknown> | null = null;
+
+/**
+ * Pede para o ciclo em andamento parar no próximo ponto seguro (entre dois
+ * envios) e espera ele terminar. Usado no desligamento do processo, para um
+ * restart no meio do ciclo não cortar um envio pela metade (mensagem enviada
+ * mas não registrada = reenvio em duplicidade no dia seguinte).
+ */
+export async function stopBillingCycle(): Promise<void> {
+  stopRequested = true;
+  if (runningCycle) await runningCycle.catch(() => undefined);
+}
+
 interface NotifiableRow extends ChargeRow {
   // O JOIN interno com clients garante cliente presente nas notificáveis.
   client_id: string;
@@ -76,9 +93,12 @@ async function ensurePix(
     };
   }
 
+  // Fatura já vencida: os gateways recusam Pix com vencimento no passado,
+  // então o Pix nasce vencendo hoje (a fatura continua com a data original).
+  const today = todayISO();
   const result = await gateway.createPixCharge({
     amountCents: charge.amount_cents,
-    dueDate: charge.due_date,
+    dueDate: charge.due_date < today ? today : charge.due_date,
     description: charge.description,
     externalReference: charge.id,
     client: {
@@ -118,7 +138,12 @@ async function spawnRecurringCharges(today: string): Promise<number> {
       WHERE recurrence <> 'NONE'
         AND next_generated = FALSE
         AND status <> 'CANCELED'
-        AND client_id IS NOT NULL -- cliente excluído encerra a série
+        -- Cliente excluído (soft delete: deleted_at preenchido) pausa a série.
+        -- Se a exclusão for desfeita, o laço abaixo recupera os ciclos perdidos.
+        AND EXISTS (
+              SELECT 1 FROM clients cl
+               WHERE cl.id = charges.client_id AND cl.deleted_at IS NULL
+            )
         AND due_date <= $1
       ORDER BY due_date`,
     [today]
@@ -204,6 +229,7 @@ async function findChargesToNotify(today: string): Promise<NotifiableRow[]> {
        FROM charges ch
        JOIN clients cl ON cl.id = ch.client_id
       WHERE ch.last_notified_at IS NULL
+        AND cl.deleted_at IS NULL -- cliente excluído não recebe cobrança
         AND (
               (ch.status = 'PENDING' AND ch.due_date = $1)
            OR  ch.status = 'OVERDUE'
@@ -311,10 +337,20 @@ async function sendChargeMessage(
  * Ciclo diário completo do motor de cobrança. Chamado pelo CRON (08:00 no
  * fuso APP_TZ por padrão) e reutilizado tal-e-qual pelos testes.
  */
-export async function runBillingCycle(
+export function runBillingCycle(
   deps: AppDeps,
   today: string = todayISO()
 ): Promise<CycleReport> {
+  const cycle = runCycle(deps, today);
+  runningCycle = cycle;
+  const clear = () => {
+    if (runningCycle === cycle) runningCycle = null;
+  };
+  cycle.then(clear, clear);
+  return cycle;
+}
+
+async function runCycle(deps: AppDeps, today: string): Promise<CycleReport> {
   const report: CycleReport = {
     today,
     generated: 0,
@@ -329,46 +365,63 @@ export async function runBillingCycle(
   report.overdueMarked = await markOverdue(today);
 
   const toNotify = await findChargesToNotify(today);
-  const settingsCache = new Map<string, SettingsRow | null>();
-  const blockedCache = new Map<string, boolean>();
 
-  // Anti-spam: pausa (deps.interSendDelay) entre disparos consecutivos pelo
-  // MESMO chip — a instância é por usuário, então trocar de usuário troca de
-  // chip e dispensa espaçamento. Pulos que não tocam a Evolution (sem
-  // WhatsApp, falha de gateway) também não contam. O ORDER BY user_id da
-  // consulta agrupa as faturas por chip.
-  let lastAttemptUserId: string | null = null;
-
+  // Cada usuário tem o próprio chip (instância da Evolution), então as filas
+  // rodam em paralelo entre usuários (até NOTIFY_CONCURRENCY por vez) e em
+  // sequência dentro do mesmo usuário. Assim, quem tem muitas faturas não
+  // atrasa o envio dos outros.
+  const byUser = new Map<string, NotifiableRow[]>();
   for (const charge of toNotify) {
+    const queue = byUser.get(charge.user_id);
+    if (queue) queue.push(charge);
+    else byUser.set(charge.user_id, [charge]);
+  }
+
+  const notifyUser = async (userId: string, charges: NotifiableRow[]): Promise<void> => {
     // Assinatura bloqueada: o painel já está fechado, e o motor também para
     // de cobrar os clientes dessa conta. As faturas ficam pendentes e saem
     // no primeiro ciclo depois da renovação.
-    if (!blockedCache.has(charge.user_id)) {
-      blockedCache.set(charge.user_id, (await findAccessByUser(charge.user_id)).state === 'BLOCKED');
+    if ((await findAccessByUser(userId)).state === 'BLOCKED') {
+      report.blockedSkipped += charges.length;
+      return;
     }
-    if (blockedCache.get(charge.user_id)) {
-      report.blockedSkipped++;
-      continue;
-    }
-
-    if (!settingsCache.has(charge.user_id)) {
-      settingsCache.set(charge.user_id, await findSettingsByUserId(charge.user_id));
-    }
-    const settings = settingsCache.get(charge.user_id)!;
+    const settings = await findSettingsByUserId(userId);
     if (!settings) {
-      report.usersSkipped++;
-      continue;
+      report.usersSkipped += charges.length;
+      return;
     }
 
-    if (deps.interSendDelay && lastAttemptUserId === charge.user_id) {
-      await deps.interSendDelay();
-    }
+    // Anti-spam: pausa (deps.interSendDelay) entre disparos consecutivos pelo
+    // MESMO chip. Pulos que não tocam a Evolution (sem WhatsApp, falha de
+    // gateway) não contam.
+    let attemptedBefore = false;
+    for (const charge of charges) {
+      // Desligamento em andamento (deploy/restart): para entre um envio e
+      // outro. O que sobrou continua elegível e sai no próximo ciclo.
+      if (stopRequested) return;
+      if (deps.interSendDelay && attemptedBefore) await deps.interSendDelay();
+      if (stopRequested) return;
 
-    const outcome = await sendChargeMessage(deps, settings, charge);
-    if (outcome.attempted) lastAttemptUserId = charge.user_id;
-    if (outcome.sent) report.notified++;
-    else report.notifyFailed++;
-  }
+      const outcome = await sendChargeMessage(deps, settings, charge);
+      if (outcome.attempted) attemptedBefore = true;
+      if (outcome.sent) report.notified++;
+      else report.notifyFailed++;
+    }
+  };
+
+  const queues = [...byUser.entries()];
+  const worker = async (): Promise<void> => {
+    for (let next = queues.shift(); next; next = queues.shift()) {
+      try {
+        await notifyUser(next[0], next[1]);
+      } catch (error) {
+        // Erro inesperado de um usuário não derruba o ciclo dos demais.
+        report.notifyFailed += 1;
+        console.error(`[motor] falha ao notificar as faturas do usuário ${next[0]}:`, error);
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(NOTIFY_CONCURRENCY, queues.length) }, worker));
 
   return report;
 }
@@ -388,7 +441,7 @@ export async function notifyChargeNow(
     `SELECT ch.*, cl.name AS client_name, cl.phone AS client_phone,
             cl.email AS client_email, cl.document AS client_document
        FROM charges ch JOIN clients cl ON cl.id = ch.client_id
-      WHERE ch.user_id = $1 AND ch.id = $2`,
+      WHERE ch.user_id = $1 AND ch.id = $2 AND cl.deleted_at IS NULL`,
     [userId, chargeId]
   );
   if (!charge) return { sent: false, attempted: false, reason: 'Fatura não encontrada' };

@@ -118,6 +118,10 @@ export interface Metrics {
   defaultRatePercent: number;
   maturedCount: number;
   maturedUnpaid: number;
+  /** Contagem de faturas por situação. open = pendentes + enviadas (ainda não vencidas). */
+  statusCounts: { paid: number; open: number; overdue: number };
+  clientsTotal: number;
+  clientsOverdue: number;
   mrrCents: number;
   projection30dCents: number;
 }

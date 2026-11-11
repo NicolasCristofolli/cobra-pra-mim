@@ -1,6 +1,10 @@
 node_modules/
 dist/
 .next/
+.next-build/
+.next-old/
+dist-build/
+dist-old/
 .env
 .env.test
 *.log

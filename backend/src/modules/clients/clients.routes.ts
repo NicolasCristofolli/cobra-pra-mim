@@ -2,11 +2,10 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { query, queryOne, withTransaction } from '../../db';
 import { AppError, asyncHandler, notFound } from '../../lib/errors';
-import { isRepeatedDigits, isValidCNPJ, isValidCPF, normalizePhone } from '../../lib/format';
-import { requireAuth } from '../../middleware/auth';
+import { isValidCpfCnpj } from '../../lib/document';
+import { isRepeatedDigits, normalizePhone } from '../../lib/format';
 
 const router = Router();
-router.use(requireAuth);
 
 const clientSchema = z.object({
   name: z.string().trim().min(2, 'Informe o nome do cliente'),
@@ -31,7 +30,7 @@ const clientSchema = z.object({
       'CPF/CNPJ inválido — use 11 (CPF) ou 14 (CNPJ) dígitos'
     )
     .refine(
-      (digits) => (digits.length === 11 ? isValidCPF(digits) : isValidCNPJ(digits)),
+      (digits) => isValidCpfCnpj(digits),
       'CPF/CNPJ inválido'
     ),
   notes: z.string().trim().max(2000).nullish().or(z.literal('').transform(() => null))
@@ -194,7 +193,7 @@ router.delete(
       const canceled = await tx.query<{ id: string }>(
         `UPDATE charges
             SET status = 'CANCELED', updated_at = now()
-          WHERE user_id = $1 AND client_id = $2 AND status IN ('PENDING', 'OVERDUE')
+          WHERE user_id = $1 AND client_id = $2 AND status IN ('PENDING', 'SENT', 'OVERDUE')
           RETURNING id`,
         [req.userId, id]
       );

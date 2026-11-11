@@ -1,7 +1,8 @@
-import type {
-  CreatePixChargeInput,
-  CreatePixChargeResult,
-  GatewayPort
+import {
+  GATEWAY_TIMEOUT_MS,
+  type CreatePixChargeInput,
+  type CreatePixChargeResult,
+  type GatewayPort
 } from './types';
 
 /**
@@ -27,13 +28,14 @@ export class AsaasGateway implements GatewayPort {
         'Content-Type': 'application/json',
         access_token: this.apiKey,
         ...init?.headers
-      }
+      },
+      signal: AbortSignal.timeout(GATEWAY_TIMEOUT_MS)
     });
     const text = await response.text();
     if (!response.ok) {
       throw new Error(`Asaas ${response.status} em ${path}: ${text.slice(0, 300)}`);
     }
-    return JSON.parse(text) as T;
+    return (text ? JSON.parse(text) : {}) as T;
   }
 
   private async ensureCustomer(client: CreatePixChargeInput['client']): Promise<string> {
@@ -89,5 +91,9 @@ export class AsaasGateway implements GatewayPort {
       pixQrCodeUrl,
       invoiceUrl: payment.invoiceUrl ?? null
     };
+  }
+
+  async cancelCharge(gatewayChargeId: string): Promise<void> {
+    await this.request(`/payments/${encodeURIComponent(gatewayChargeId)}`, { method: 'DELETE' });
   }
 }

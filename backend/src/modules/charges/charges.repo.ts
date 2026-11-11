@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { query, queryOne } from '../../db';
-import { parseISODate, type RecurrenceKind } from '../../lib/dates';
+import { parseISODate, todayISO, type RecurrenceKind } from '../../lib/dates';
 
 // SENT = mensagem de cobrança já enviada no WhatsApp, aguardando pagamento.
 export type ChargeStatus = 'PENDING' | 'SENT' | 'PAID' | 'OVERDUE' | 'CANCELED';
@@ -132,6 +132,15 @@ export async function updateCharge(
               WHEN recurrence IN ('MONTHLY', 'YEARLY') THEN $6::smallint
               ELSE anchor_day
             END,
+            -- Valor ou vencimento mudou: o Pix já gerado não vale mais. Limpa
+            -- os dados do gateway e volta para PENDING sem "já notificada",
+            -- para a cobrança ser reenviada com o Pix do valor certo.
+            gateway_charge_id = CASE WHEN amount_cents <> $4 OR due_date <> $5::date THEN NULL ELSE gateway_charge_id END,
+            pix_copy_paste    = CASE WHEN amount_cents <> $4 OR due_date <> $5::date THEN NULL ELSE pix_copy_paste END,
+            pix_qr_code_url   = CASE WHEN amount_cents <> $4 OR due_date <> $5::date THEN NULL ELSE pix_qr_code_url END,
+            invoice_url       = CASE WHEN amount_cents <> $4 OR due_date <> $5::date THEN NULL ELSE invoice_url END,
+            last_notified_at  = CASE WHEN amount_cents <> $4 OR due_date <> $5::date THEN NULL ELSE last_notified_at END,
+            status            = CASE WHEN amount_cents <> $4 OR due_date <> $5::date THEN 'PENDING'::charge_status ELSE status END,
             updated_at = now()
       WHERE user_id = $1 AND id = $2 AND status IN ('PENDING', 'SENT')
       RETURNING *`,
@@ -220,14 +229,16 @@ export async function unmarkChargePaid(
 ): Promise<ChargeRow | null> {
   return queryOne<ChargeRow>(
     `UPDATE charges
-        SET status = CASE WHEN due_date < CURRENT_DATE THEN 'OVERDUE'::charge_status
+        SET status = CASE WHEN due_date < $3::date THEN 'OVERDUE'::charge_status
                            ELSE 'PENDING'::charge_status END,
             paid_at = NULL,
             net_amount_cents = NULL,
             updated_at = now()
       WHERE user_id = $1 AND id = $2 AND status = 'PAID'
       RETURNING *`,
-    [userId, chargeId]
+    // "Hoje" no fuso do app: o CURRENT_DATE do Postgres roda em UTC e vira o
+    // dia às 21h de Brasília.
+    [userId, chargeId, todayISO()]
   );
 }
 
@@ -260,13 +271,13 @@ export async function reactivateCharge(
 ): Promise<ChargeRow | null> {
   return queryOne<ChargeRow>(
     `UPDATE charges
-        SET status = CASE WHEN due_date < CURRENT_DATE THEN 'OVERDUE'::charge_status
+        SET status = CASE WHEN due_date < $3::date THEN 'OVERDUE'::charge_status
                            ELSE 'PENDING'::charge_status END,
             updated_at = now()
       WHERE user_id = $1 AND id = $2 AND status = 'CANCELED'
         AND client_id IN (SELECT id FROM clients WHERE user_id = $1 AND deleted_at IS NULL)
       RETURNING *`,
-    [userId, chargeId]
+    [userId, chargeId, todayISO()]
   );
 }
 

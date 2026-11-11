@@ -112,7 +112,8 @@ async function verifyMercadoPagoPayment(
   accessToken: string
 ): Promise<NormalizedEvent> {
   const response = await fetch(`https://api.mercadopago.com/v1/payments/${paymentId}`, {
-    headers: { Authorization: `Bearer ${accessToken}` }
+    headers: { Authorization: `Bearer ${accessToken}` },
+    signal: AbortSignal.timeout(15_000)
   });
   if (!response.ok) {
     throw new Error(`Mercado Pago ${response.status} ao verificar pagamento ${paymentId}`);
@@ -153,9 +154,8 @@ export default function webhooksRouter(deps: AppDeps): Router {
   router.post(
     '/payments/:userId',
     asyncHandler(async (req, res) => {
-      
-      console.log('➡️ WEBHOOK DE PAGAMENTO RECEBIDO:', req.body);
-
+      // Nada do corpo vai para o log: a rota é pública (chega antes da
+      // autenticação) e o payload traz dados pessoais do pagador.
       const parsed = paramsSchema.safeParse(req.params);
       if (!parsed.success) {
         console.log('⚠️ Webhook barrado: userId da URL não é um UUID válido:', req.params.userId);
@@ -259,10 +259,16 @@ export default function webhooksRouter(deps: AppDeps): Router {
         return;
       }
 
-      await markChargePaid(userId, charge.id, {
+      const paid = await markChargePaid(userId, charge.id, {
         netAmountCents: event.netAmountCents,
         gatewayChargeId: event.gatewayChargeId
       });
+      // Dois eventos simultâneos do mesmo pagamento (CONFIRMED + RECEIVED): só
+      // quem de fato deu a baixa segue para o SSE e a confirmação no WhatsApp.
+      if (!paid) {
+        res.json({ received: true, alreadyPaid: true });
+        return;
+      }
 
       // Dashboard aberto atualiza na hora (SSE).
       publish(userId, {

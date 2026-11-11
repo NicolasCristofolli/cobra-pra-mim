@@ -60,7 +60,9 @@ export function resolveAccess(
   }
 
   // ACTIVE, PAST_DUE e CANCELED dependem do fim do período já pago.
-  const end = sub.current_period_end;
+  // Cancelou ainda no período de teste (nunca pagou): o teste vale até o fim.
+  const end =
+    sub.current_period_end ?? (sub.status === 'CANCELED' ? sub.trial_ends_at : null);
   if (!end) return blocked('PENDING_PAYMENT');
   if (now <= end) return { state: 'FULL', reason: 'OK', blocksAt: end.toISOString() };
 

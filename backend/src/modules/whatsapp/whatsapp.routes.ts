@@ -1,7 +1,6 @@
 import { Router } from 'express';
 import { query } from '../../db';
 import { AppError, asyncHandler } from '../../lib/errors';
-import { requireAuth } from '../../middleware/auth';
 import {
   ensureInstance,
   getConnectionState,
@@ -38,16 +37,18 @@ function toStatus(state: EvolutionConnectionState | null): WhatsappStatus {
 async function setWhatsappEnabled(userId: string, enabled: boolean): Promise<void> {
   await query(
     `UPDATE settings
-        SET whatsapp_provider = $2,
+        SET whatsapp_provider = $2::whatsapp_provider,
             whatsapp_instance = $3,
             updated_at = now()
-      WHERE user_id = $1`,
+      WHERE user_id = $1
+        -- /whatsapp/status é consultado em polling: só grava quando muda.
+        AND (whatsapp_provider IS DISTINCT FROM $2::whatsapp_provider
+             OR whatsapp_instance IS DISTINCT FROM $3)`,
     [userId, enabled ? 'EVOLUTION' : null, enabled ? instanceNameFor(userId) : null]
   );
 }
 
 const router = Router();
-router.use(requireAuth);
 
 router.get(
   '/status',

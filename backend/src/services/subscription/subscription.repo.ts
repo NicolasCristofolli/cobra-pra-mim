@@ -2,6 +2,9 @@ import type { PoolClient } from 'pg';
 import { query, queryOne } from '../../db';
 import { resolveAccess, type Access, type SubscriptionStatus } from './access';
 
+/** Pool (padrão) ou o cliente de uma transação aberta: dentro de withTransaction, passe o `tx`. */
+type Db = Pick<PoolClient, 'query'>;
+
 export type BillingCycle = 'MONTHLY' | 'YEARLY';
 export type PaymentStatus = 'PENDING' | 'CONFIRMED' | 'OVERDUE' | 'REFUNDED' | 'FAILED';
 
@@ -60,19 +63,44 @@ export function findActivePlanByCode(code: string): Promise<PlanRow | null> {
   return queryOne<PlanRow>('SELECT * FROM plans WHERE code = $1 AND active', [code]);
 }
 
-export function findSubscriptionByUser(userId: string): Promise<SubscriptionWithPlan | null> {
-  return queryOne<SubscriptionWithPlan>(`${WITH_PLAN} WHERE s.user_id = $1`, [userId]);
+export async function findSubscriptionByUser(
+  userId: string,
+  db?: Db
+): Promise<SubscriptionWithPlan | null> {
+  const sql = `${WITH_PLAN} WHERE s.user_id = $1`;
+  if (db) return (await db.query<SubscriptionWithPlan>(sql, [userId])).rows[0] ?? null;
+  return queryOne<SubscriptionWithPlan>(sql, [userId]);
 }
 
-export async function isAdmin(userId: string): Promise<boolean> {
-  const row = await queryOne<{ role: string }>('SELECT role FROM users WHERE id = $1', [userId]);
-  return row?.role === 'ADMIN';
-}
-
-/** Acesso do usuário: considera o papel (admin) e a assinatura. */
+/**
+ * Acesso do usuário: considera o papel (admin) e a assinatura. UMA consulta
+ * só — roda em toda requisição autenticada (loadAccess).
+ */
 export async function findAccessByUser(userId: string): Promise<Access> {
-  const [admin, sub] = await Promise.all([isAdmin(userId), findSubscriptionByUser(userId)]);
-  return resolveAccess(sub, new Date(), { admin });
+  const row = await queryOne<{
+    role: string;
+    status: SubscriptionStatus | null;
+    current_period_end: Date | null;
+    trial_ends_at: Date | null;
+    grace_days: number | null;
+  }>(
+    `SELECT u.role, s.status, s.current_period_end, s.trial_ends_at, p.grace_days
+       FROM users u
+       LEFT JOIN subscriptions s ON s.user_id = u.id
+       LEFT JOIN plans p ON p.id = s.plan_id
+      WHERE u.id = $1`,
+    [userId]
+  );
+  const sub =
+    row?.status != null
+      ? {
+          status: row.status,
+          current_period_end: row.current_period_end,
+          trial_ends_at: row.trial_ends_at,
+          grace_days: row.grace_days ?? 0
+        }
+      : null;
+  return resolveAccess(sub, new Date(), { admin: row?.role === 'ADMIN' });
 }
 
 /**
@@ -81,9 +109,11 @@ export async function findAccessByUser(userId: string): Promise<Access> {
  * deixaria o período pago no passado e a conta continuaria bloqueada. Nesse
  * caso o checkout cria uma assinatura nova.
  */
-export function findOpenPayment(subscriptionId: string): Promise<PaymentRow | null> {
-  return queryOne<PaymentRow>(
-    `SELECT sp.* FROM subscription_payments sp
+export async function findOpenPayment(
+  subscriptionId: string,
+  db?: Db
+): Promise<PaymentRow | null> {
+  const sql = `SELECT sp.* FROM subscription_payments sp
        JOIN subscriptions s ON s.id = sp.subscription_id
        JOIN plans p ON p.id = s.plan_id
       WHERE sp.subscription_id = $1
@@ -91,9 +121,9 @@ export function findOpenPayment(subscriptionId: string): Promise<PaymentRow | nu
         AND sp.checkout_url IS NOT NULL
         AND sp.due_date + CASE WHEN p.cycle = 'YEARLY' THEN interval '1 year'
                                ELSE interval '1 month' END > now()
-      ORDER BY sp.due_date DESC LIMIT 1`,
-    [subscriptionId]
-  );
+      ORDER BY sp.due_date DESC LIMIT 1`;
+  if (db) return (await db.query<PaymentRow>(sql, [subscriptionId])).rows[0] ?? null;
+  return queryOne<PaymentRow>(sql, [subscriptionId]);
 }
 
 export async function findSubscriptionForUpdate(

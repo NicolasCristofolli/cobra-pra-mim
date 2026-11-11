@@ -6,6 +6,7 @@ import { todayISO } from '../../lib/dates';
 import { AppError, asyncHandler, notFound } from '../../lib/errors';
 import type { AppDeps } from '../../services/deps';
 import { requireVerifiedEmail } from '../../middleware/auth';
+import { createCheckoutLimiter } from '../../middleware/rate-limit';
 import { resolveAccess } from '../../services/subscription/access';
 import {
   findAccessByUser,
@@ -37,6 +38,7 @@ const unavailable = () =>
  */
 export default function billingRouter(deps: AppDeps): Router {
   const router = Router();
+  const checkoutLimiter = createCheckoutLimiter();
 
   router.get(
     '/plans',
@@ -71,6 +73,7 @@ export default function billingRouter(deps: AppDeps): Router {
   router.post(
     '/checkout',
     requireVerifiedEmail,
+    checkoutLimiter,
     asyncHandler(async (req, res) => {
       const { planCode, cpfCnpj } = checkoutSchema.parse(req.body);
       const platform = deps.platformBillingFactory();
@@ -80,8 +83,20 @@ export default function billingRouter(deps: AppDeps): Router {
       if (!plan) throw notFound('Plano não encontrado');
 
       const checkoutUrl = await withTransaction(async (tx) => {
-        // Um checkout por usuário por vez: o duplo clique não cria duas assinaturas.
-        await tx.query('SELECT pg_advisory_xact_lock(hashtext($1))', [req.userId]);
+        // Um checkout por usuário por vez: o duplo clique não cria duas
+        // assinaturas. try_lock (sem espera): requisições repetidas respondem
+        // 409 na hora em vez de ficarem enfileiradas segurando conexões do pool.
+        const lock = await tx.query<{ locked: boolean }>(
+          'SELECT pg_try_advisory_xact_lock(hashtext($1)) AS locked',
+          [req.userId]
+        );
+        if (!lock.rows[0]?.locked) {
+          throw new AppError(
+            'Já existe um pagamento sendo iniciado para esta conta. Aguarde alguns segundos.',
+            409,
+            'CHECKOUT_IN_PROGRESS'
+          );
+        }
 
         const user = (
           await tx.query<{ name: string; email: string }>(
@@ -89,10 +104,11 @@ export default function billingRouter(deps: AppDeps): Router {
             [req.userId]
           )
         ).rows[0]!;
-        const sub = await findSubscriptionByUser(req.userId);
+        // Mesma conexão da transação: nada aqui dentro pede outra ao pool.
+        const sub = await findSubscriptionByUser(req.userId, tx);
         const access = resolveAccess(sub);
         const today = todayISO();
-        const openPayment = sub?.gateway_subscription_id ? await findOpenPayment(sub.id) : null;
+        const openPayment = sub?.gateway_subscription_id ? await findOpenPayment(sub.id, tx) : null;
         const samePlan = sub?.plan_id === plan.id;
         const isPaying = sub?.status === 'ACTIVE' || sub?.status === 'PAST_DUE';
 

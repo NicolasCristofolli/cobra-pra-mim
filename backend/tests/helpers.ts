@@ -114,6 +114,7 @@ export interface TestHarness {
   platformCalls: PlatformCall[];
   sentMessages: SentMessage[];
   gatewayCalls: CreatePixChargeInput[];
+  gatewayCancels: string[];
   /** Faz o próximo sendText falhar uma vez (simula instabilidade). */
   failNextSend: () => void;
 }
@@ -126,6 +127,7 @@ export function buildTestApp(
   let platformCounter = 0;
   const sentMessages: SentMessage[] = [];
   const gatewayCalls: CreatePixChargeInput[] = [];
+  const gatewayCancels: string[] = [];
   let failOnce = false;
   let pixCounter = 0;
 
@@ -177,6 +179,9 @@ export function buildTestApp(
                 pixQrCodeUrl: null,
                 invoiceUrl: `https://fake.gateway/inv/${pixCounter}`
               };
+            },
+            async cancelCharge(gatewayChargeId: string): Promise<void> {
+              gatewayCancels.push(gatewayChargeId);
             }
           },
     whatsappFactory: () =>
@@ -201,6 +206,7 @@ export function buildTestApp(
     platformCalls,
     sentMessages,
     gatewayCalls,
+    gatewayCancels,
     failNextSend: () => {
       failOnce = true;
     }

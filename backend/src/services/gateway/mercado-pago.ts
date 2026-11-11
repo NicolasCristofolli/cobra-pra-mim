@@ -1,7 +1,8 @@
-import type {
-  CreatePixChargeInput,
-  CreatePixChargeResult,
-  GatewayPort
+import {
+  GATEWAY_TIMEOUT_MS,
+  type CreatePixChargeInput,
+  type CreatePixChargeResult,
+  type GatewayPort
 } from './types';
 
 /**
@@ -48,7 +49,8 @@ export class MercadoPagoGateway implements GatewayPort {
               }
             : undefined
         }
-      })
+      }),
+      signal: AbortSignal.timeout(GATEWAY_TIMEOUT_MS)
     });
 
     const text = await response.text();
@@ -75,5 +77,24 @@ export class MercadoPagoGateway implements GatewayPort {
         : null,
       invoiceUrl: data?.ticket_url ?? null
     };
+  }
+
+  async cancelCharge(gatewayChargeId: string): Promise<void> {
+    const response = await fetch(
+      `${this.baseUrl}/v1/payments/${encodeURIComponent(gatewayChargeId)}`,
+      {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${this.accessToken}`
+        },
+        body: JSON.stringify({ status: 'cancelled' }),
+        signal: AbortSignal.timeout(GATEWAY_TIMEOUT_MS)
+      }
+    );
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`Mercado Pago ${response.status} ao cancelar: ${text.slice(0, 300)}`);
+    }
   }
 }

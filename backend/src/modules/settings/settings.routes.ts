@@ -5,7 +5,6 @@ import { queryOne } from '../../db';
 import { env } from '../../config/env';
 import { decrypt, encrypt, maskSecret } from '../../lib/crypto';
 import { asyncHandler, AppError } from '../../lib/errors';
-import { requireAuth } from '../../middleware/auth';
 
 export interface SettingsRow {
   id: string;
@@ -61,7 +60,6 @@ function serialize(row: SettingsRow) {
 }
 
 const router = Router();
-router.use(requireAuth);
 
 router.get(
   '/',

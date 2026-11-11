@@ -9,7 +9,9 @@ let pool: Pool | null = null;
 
 export function getPool(): Pool {
   if (!pool) {
-    pool = new Pool({ connectionString: env.databaseUrl, max: 10 });
+    // connectionTimeoutMillis: com o pool esgotado, a requisição falha em 10s em
+    // vez de ficar pendurada para sempre (e travar a API inteira).
+    pool = new Pool({ connectionString: env.databaseUrl, max: 10, connectionTimeoutMillis: 10_000 });
   }
   return pool;
 }

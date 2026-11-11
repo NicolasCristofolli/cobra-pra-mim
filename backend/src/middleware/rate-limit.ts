@@ -56,8 +56,10 @@ export function createAuthLimiters() {
 
     /**
      * Por conta: barra força bruta distribuída (botnet, vários IPs) contra
-     * UMA conta. Só falhas contam, então quem acerta a senha nunca é
-     * bloqueado por isso.
+     * UMA conta. Só falhas contam. Contrapartida conhecida: depois de 10
+     * erros em 15 minutos a conta fica bloqueada até para a senha certa, ou
+     * seja, um terceiro consegue trancar o login de alguém por 15 minutos. O
+     * dono sai do bloqueio na hora por "Esqueci minha senha".
      */
     loginByAccount: limiter({
       windowMs: 15 * 60_000,
@@ -110,4 +112,17 @@ export function createAuthLimiters() {
       message: tooMany('Muitos cadastros a partir desta rede. Tente novamente em 1 hora.')
     })
   };
+}
+
+/**
+ * Checkout da assinatura, por conta: cada tentativa cria cliente/assinatura no
+ * Asaas e segura uma conexão do banco. Ninguém precisa de mais que isso.
+ */
+export function createCheckoutLimiter() {
+  return limiter({
+    windowMs: 15 * 60_000,
+    limit: 10,
+    keyGenerator: (req: Request) => `checkout:${req.userId ?? ipKey(req.ip)}`,
+    message: tooMany('Muitas tentativas de pagamento. Aguarde alguns minutos e tente de novo.')
+  });
 }

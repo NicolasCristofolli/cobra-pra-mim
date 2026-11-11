@@ -2,11 +2,11 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { queryOne } from '../../db';
 import { asyncHandler, AppError, notFound } from '../../lib/errors';
-import { todayISO } from '../../lib/dates';
-import { requireAuth } from '../../middleware/auth';
+import { parseISODate, todayISO } from '../../lib/dates';
 import { publish } from '../../lib/events';
 import { notifyChargeNow, sendPaymentConfirmation } from '../../services/billing-engine';
 import type { AppDeps } from '../../services/deps';
+import { findSettingsByUserId } from '../settings/settings.routes';
 import {
   cancelCharge,
   createCharge,
@@ -23,17 +23,35 @@ import {
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
+/** Formato YYYY-MM-DD E data que existe no calendário (31/02 é recusado com 400, não 500). */
+function isRealDate(value: string): boolean {
+  if (!ISO_DATE.test(value)) return false;
+  try {
+    parseISODate(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+const isoDate = (message: string) => z.string().refine(isRealDate, message);
+
+// Teto de R$ 9.999.999,99: bem abaixo do limite do INTEGER do Postgres.
+const MAX_AMOUNT_CENTS = 999_999_999;
+const amountCents = z
+  .number()
+  .int()
+  .positive('Valor precisa ser maior que zero')
+  .max(MAX_AMOUNT_CENTS, 'Valor acima do limite permitido');
+
 const createSchema = z
   .object({
     clientId: z.string().uuid('Selecione um cliente'),
     description: z.string().trim().min(2, 'Descreva a cobrança'),
-    amountCents: z.number().int().positive('Valor precisa ser maior que zero'),
-    dueDate: z.string().regex(ISO_DATE, 'Data de vencimento inválida'),
+    amountCents,
+    dueDate: isoDate('Data de vencimento inválida'),
     recurrence: z.enum(['NONE', 'WEEKLY', 'MONTHLY', 'YEARLY']).default('NONE'),
-    recurrenceEndDate: z
-      .string()
-      .regex(ISO_DATE, 'Data limite da recorrência inválida')
-      .nullish()
+    recurrenceEndDate: isoDate('Data limite da recorrência inválida').nullish()
   })
   .superRefine((data, ctx) => {
     if (data.dueDate < todayISO()) {
@@ -65,8 +83,8 @@ const createSchema = z
 
 const updateSchema = z.object({
   description: z.string().trim().min(2, 'Descreva a cobrança'),
-  amountCents: z.number().int().positive('Valor precisa ser maior que zero'),
-  dueDate: z.string().regex(ISO_DATE, 'Data de vencimento inválida')
+  amountCents,
+  dueDate: isoDate('Data de vencimento inválida')
 });
 
 const listSchema = z.object({
@@ -80,7 +98,6 @@ const idParam = z.object({ id: z.string().uuid() });
 
 export default function chargesRouter(deps: AppDeps): Router {
   const router = Router();
-  router.use(requireAuth);
 
   router.get(
     '/',
@@ -142,6 +159,22 @@ export default function chargesRouter(deps: AppDeps): Router {
         throw new AppError('Só é possível editar cobranças em aberto', 409);
       }
 
+      // Valor ou vencimento mudou e já existe Pix no gateway: cancela a
+      // cobrança antiga lá, senão o cliente ainda conseguiria pagar o valor
+      // antigo e o webhook daria baixa na fatura com o valor novo. Falha aqui
+      // não impede a edição (o Pix antigo deixa de ser enviado de todo modo).
+      const pixOutdated =
+        existing.amount_cents !== data.amountCents || existing.due_date !== data.dueDate;
+      if (pixOutdated && existing.gateway_charge_id) {
+        try {
+          const settings = await findSettingsByUserId(req.userId);
+          const gateway = settings ? deps.gatewayFactory(settings) : null;
+          await gateway?.cancelCharge(existing.gateway_charge_id);
+        } catch (error) {
+          console.warn('[charges] não foi possível cancelar o Pix antigo no gateway:', error);
+        }
+      }
+
       let updated;
       try {
         updated = await updateCharge(req.userId, id, {
@@ -180,6 +213,8 @@ export default function chargesRouter(deps: AppDeps): Router {
         throw new AppError('Fatura cancelada não pode ser paga', 409);
       }
       const updated = await markChargePaid(req.userId, id);
+      // Outra requisição (ou o webhook) deu baixa entre a leitura e o update.
+      if (!updated) throw new AppError('Fatura já está paga', 409);
       publish(req.userId, { type: 'payment', chargeId: id, source: 'manual' });
 
       // Confirmação no WhatsApp: falha aqui NÃO desfaz a baixa — a fatura já
@@ -190,7 +225,7 @@ export default function chargesRouter(deps: AppDeps): Router {
         console.error('[charges] confirmação WhatsApp falhou:', error);
       }
 
-      res.json(serializeCharge({ ...updated!, client_name: existing.client_name, client_phone: existing.client_phone }));
+      res.json(serializeCharge({ ...updated, client_name: existing.client_name, client_phone: existing.client_phone }));
     })
   );
 

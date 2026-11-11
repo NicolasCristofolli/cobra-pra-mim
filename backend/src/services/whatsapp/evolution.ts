@@ -20,7 +20,8 @@ export class EvolutionWhatsApp implements WhatsAppPort {
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', apikey: this.apiKey },
-      body: JSON.stringify({ number: phone, text: message })
+      body: JSON.stringify({ number: phone, text: message }),
+      signal: AbortSignal.timeout(30_000)
     });
     if (!response.ok) {
       const body = await response.text();

@@ -2,14 +2,18 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { query, queryOne } from '../../db';
 import { env } from '../../config/env';
-import { addDaysISO, projectOccurrences, todayISO, type RecurrenceKind } from '../../lib/dates';
+import {
+  addDaysISO,
+  nextDueDate,
+  projectOccurrences,
+  todayISO,
+  type RecurrenceKind
+} from '../../lib/dates';
 import { asyncHandler } from '../../lib/errors';
 import { subscribe, unsubscribe } from '../../lib/events';
-import { requireAuth } from '../../middleware/auth';
 import { serializeCharge, type ChargeRow } from '../charges/charges.repo';
 
 const router = Router();
-router.use(requireAuth);
 
 /** Fator de normalização mensal por tipo de recorrência (MRR). */
 const MONTHLY_FACTOR: Record<Exclude<RecurrenceKind, 'NONE'>, number> = {
@@ -33,6 +37,8 @@ router.get(
       active_amount: string;
       matured_count: string;
       matured_unpaid: string;
+      paid_count: string;
+      open_count: string;
     }>(
       `SELECT
          COALESCE(SUM(amount_cents) FILTER (WHERE status <> 'CANCELED'), 0)::bigint AS total_billed,
@@ -43,31 +49,56 @@ router.get(
          COALESCE(SUM(amount_cents)
                   FILTER (WHERE status IN ('PENDING', 'SENT', 'OVERDUE')), 0)::bigint       AS active_amount,
          COUNT(*) FILTER (WHERE status IN ('PAID', 'OVERDUE'))            AS matured_count,
-         COUNT(*) FILTER (WHERE status = 'OVERDUE')                      AS matured_unpaid
+         COUNT(*) FILTER (WHERE status = 'OVERDUE')                      AS matured_unpaid,
+         COUNT(*) FILTER (WHERE status = 'PAID')                         AS paid_count,
+         COUNT(*) FILTER (WHERE status IN ('PENDING', 'SENT'))           AS open_count
        FROM charges
        WHERE user_id = $1`,
       [req.userId]
     );
 
-    // MRR: última fatura de cada série recorrente; séries encerradas
-    // (última fatura cancelada) ficam de fora.
-    const seriesHeads = await query<{
+    // Totais de clientes para o painel (evita baixar a lista inteira só para contar).
+    const clientTotals = await queryOne<{ total: string; overdue: string }>(
+      `SELECT COUNT(*) AS total,
+              COUNT(*) FILTER (WHERE EXISTS (
+                SELECT 1 FROM charges ch
+                 WHERE ch.client_id = c.id AND ch.status = 'OVERDUE'
+              )) AS overdue
+         FROM clients c
+        WHERE c.user_id = $1 AND c.deleted_at IS NULL`,
+      [req.userId]
+    );
+
+    // MRR: última fatura de cada série recorrente. Ficam de fora as séries
+    // encerradas: última fatura cancelada, cliente excluído ou data limite
+    // (recurrence_end_date) já atingida.
+    const latestOfSeries = await query<{
       recurrence: RecurrenceKind;
       amount_cents: number;
       anchor_day: number | null;
       due_date: string;
-      status: string;
+      recurrence_end_date: string | null;
     }>(
-      `SELECT recurrence, amount_cents, anchor_day, due_date, status
+      `SELECT recurrence, amount_cents, anchor_day, due_date, recurrence_end_date
          FROM (
            SELECT DISTINCT ON (series_id)
-                  recurrence, amount_cents, anchor_day, due_date, status
+                  recurrence, amount_cents, anchor_day, due_date, status,
+                  recurrence_end_date, client_id
              FROM charges
             WHERE user_id = $1 AND recurrence <> 'NONE'
             ORDER BY series_id, due_date DESC
          ) latest
-        WHERE status <> 'CANCELED'`,
+        WHERE status <> 'CANCELED'
+          AND EXISTS (
+                SELECT 1 FROM clients cl
+                 WHERE cl.id = latest.client_id AND cl.deleted_at IS NULL
+              )`,
       [req.userId]
+    );
+    const seriesHeads = latestOfSeries.filter(
+      (head) =>
+        !head.recurrence_end_date ||
+        nextDueDate(head.due_date, head.recurrence, head.anchor_day) <= head.recurrence_end_date
     );
 
     const mrrCents = Math.round(
@@ -95,7 +126,10 @@ router.get(
         head.recurrence,
         head.anchor_day,
         addDaysISO(today, -1),
-        horizon
+        // A série não gera ciclos depois da data limite.
+        head.recurrence_end_date && head.recurrence_end_date < horizon
+          ? head.recurrence_end_date
+          : horizon
       );
       projectedRecurringCents += occurrences.length * head.amount_cents;
     }
@@ -116,6 +150,15 @@ router.get(
         maturedCount === 0 ? 0 : Number(((maturedUnpaid / maturedCount) * 100).toFixed(1)),
       maturedCount,
       maturedUnpaid,
+      // Contagens para o gráfico de status. "Em aberto" = PENDING + SENT
+      // (fatura enviada e ainda não vencida continua em aberto).
+      statusCounts: {
+        paid: Number(totals?.paid_count ?? 0),
+        open: Number(totals?.open_count ?? 0),
+        overdue: maturedUnpaid
+      },
+      clientsTotal: Number(clientTotals?.total ?? 0),
+      clientsOverdue: Number(clientTotals?.overdue ?? 0),
       mrrCents,
       projection30dCents: Number(openInWindow?.amount ?? 0) + projectedRecurringCents
     });
