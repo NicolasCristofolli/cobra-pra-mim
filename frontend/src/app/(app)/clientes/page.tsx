@@ -38,9 +38,17 @@ interface ClientForm {
   email: string;
   document: string;
   notes: string;
+  whatsappOptOut: boolean;
 }
 
-const EMPTY_FORM: ClientForm = { name: '', phone: '', email: '', document: '', notes: '' };
+const EMPTY_FORM: ClientForm = {
+  name: '',
+  phone: '',
+  email: '',
+  document: '',
+  notes: '',
+  whatsappOptOut: false
+};
 
 // Cores casadas com os badges de status da tabela.
 const STATUS_FILTERS: Array<{ value: ClientStatus; label: string; variant: BadgeVariant }> = [
@@ -141,7 +149,8 @@ function ClientesContent() {
       phone: client.phone,
       email: client.email ?? '',
       document: client.document ?? '',
-      notes: client.notes ?? ''
+      notes: client.notes ?? '',
+      whatsappOptOut: client.whatsappOptOut
     });
     setFormError(null);
     setDocHint(null);
@@ -163,7 +172,8 @@ function ClientesContent() {
       phone: form.phone,
       email: form.email || null,
       document: form.document,
-      notes: form.notes || null
+      notes: form.notes || null,
+      whatsappOptOut: form.whatsappOptOut
     };
     try {
       if (editing) {
@@ -443,6 +453,20 @@ function ClientesContent() {
               placeholder="Ex.: prefere ser cobrada de manhã"
             />
           </Field>
+          <label className="flex cursor-pointer items-start gap-2.5 rounded-xl bg-sand-50 px-3 py-2.5">
+            <input
+              type="checkbox"
+              className="mt-0.5 h-4 w-4 rounded border-sand-300 text-primary-600 focus:ring-leaf-500"
+              checked={form.whatsappOptOut}
+              onChange={(event) => setForm({ ...form, whatsappOptOut: event.target.checked })}
+            />
+            <span className="text-[13px] leading-snug text-sand-700">
+              <span className="font-semibold text-sand-900">Não enviar mensagens no WhatsApp</span>
+              <br />
+              Marque se o cliente pediu para não receber cobranças e lembretes. As faturas
+              continuam sendo geradas normalmente.
+            </span>
+          </label>
 
           {formError && (
             <p className="rounded-xl bg-danger-50 px-3 py-2 text-sm text-danger-700 ring-1 ring-inset ring-danger-100">

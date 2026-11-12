@@ -6,6 +6,7 @@ import {
   Ban,
   CheckCircle2,
   Copy,
+  Link2,
   Pencil,
   Plus,
   RotateCcw,
@@ -385,6 +386,11 @@ function CobrancasContent() {
     push('success', 'Pix copia-e-cola copiado!');
   }
 
+  async function copyLink(charge: Charge) {
+    await navigator.clipboard.writeText(charge.publicUrl);
+    push('success', 'Link da fatura copiado!');
+  }
+
   const totalPages = data ? Math.max(1, Math.ceil(data.total / PAGE_SIZE)) : 1;
 
   return (
@@ -529,6 +535,14 @@ function CobrancasContent() {
                       </td>
                       <td className="px-5 py-3">
                         <div className="flex justify-end gap-0.5">
+                          {charge.status !== 'CANCELED' && (
+                            <IconButton
+                              onClick={() => copyLink(charge)}
+                              title="Copiar link da fatura (página com QR Code para o cliente)"
+                            >
+                              <Link2 className="h-4 w-4" />
+                            </IconButton>
+                          )}
                           {charge.pixCopyPaste && (
                             <IconButton
                               onClick={() => copyPix(charge)}

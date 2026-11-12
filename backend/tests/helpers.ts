@@ -12,7 +12,8 @@ import type { AppDeps } from '../src/services/deps';
 import type { MailMessage } from '../src/services/mailer';
 import type {
   CreatePixChargeInput,
-  CreatePixChargeResult
+  CreatePixChargeResult,
+  RegisterWebhookInput
 } from '../src/services/gateway';
 
 export async function truncateAll(): Promise<void> {
@@ -117,6 +118,10 @@ export interface TestHarness {
   gatewayCancels: string[];
   /** Faz o próximo sendText falhar uma vez (simula instabilidade). */
   failNextSend: () => void;
+  /** Webhooks cadastrados no gateway fake (registro automático). */
+  webhookRegistrations: RegisterWebhookInput[];
+  /** Simula o chip conectado/desconectado (padrão: conectado). */
+  setWhatsappConnected: (connected: boolean) => void;
 }
 
 export function buildTestApp(
@@ -128,6 +133,8 @@ export function buildTestApp(
   const sentMessages: SentMessage[] = [];
   const gatewayCalls: CreatePixChargeInput[] = [];
   const gatewayCancels: string[] = [];
+  const webhookRegistrations: RegisterWebhookInput[] = [];
+  let whatsappConnected = true;
   let failOnce = false;
   let pixCounter = 0;
 
@@ -182,6 +189,9 @@ export function buildTestApp(
             },
             async cancelCharge(gatewayChargeId: string): Promise<void> {
               gatewayCancels.push(gatewayChargeId);
+            },
+            async registerWebhook(input: RegisterWebhookInput): Promise<void> {
+              webhookRegistrations.push(input);
             }
           },
     whatsappFactory: () =>
@@ -195,6 +205,9 @@ export function buildTestApp(
                 throw new Error('instabilidade simulada no provedor');
               }
               sentMessages.push({ phone, message });
+            },
+            async isConnected(): Promise<boolean> {
+              return whatsappConnected;
             }
           }
   };
@@ -207,6 +220,10 @@ export function buildTestApp(
     sentMessages,
     gatewayCalls,
     gatewayCancels,
+    webhookRegistrations,
+    setWhatsappConnected: (connected: boolean) => {
+      whatsappConnected = connected;
+    },
     failNextSend: () => {
       failOnce = true;
     }

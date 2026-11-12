@@ -33,7 +33,9 @@ const clientSchema = z.object({
       (digits) => isValidCpfCnpj(digits),
       'CPF/CNPJ inválido'
     ),
-  notes: z.string().trim().max(2000).nullish().or(z.literal('').transform(() => null))
+  notes: z.string().trim().max(2000).nullish().or(z.literal('').transform(() => null)),
+  // Cliente pediu para não receber mensagens: o motor e o envio manual respeitam.
+  whatsappOptOut: z.boolean().optional().default(false)
 });
 
 const DUPLICATE_FIELD_MESSAGE: Record<string, string> = {
@@ -62,6 +64,7 @@ interface ClientRow {
   email: string | null;
   document: string | null;
   notes: string | null;
+  whatsapp_opt_out: boolean;
   created_at: string;
   open_count: string;
   overdue_count: string;
@@ -82,6 +85,7 @@ function serialize(row: ClientRow) {
     email: row.email,
     document: row.document,
     notes: row.notes,
+    whatsappOptOut: row.whatsapp_opt_out,
     createdAt: row.created_at,
     openCharges: Number(row.open_count),
     overdueCharges: Number(row.overdue_count),
@@ -91,7 +95,7 @@ function serialize(row: ClientRow) {
 }
 
 const LIST_SQL = `
-  SELECT c.id, c.name, c.phone, c.email, c.document, c.notes, c.created_at,
+  SELECT c.id, c.name, c.phone, c.email, c.document, c.notes, c.whatsapp_opt_out, c.created_at,
          COUNT(ch.id) FILTER (WHERE ch.status IN ('PENDING', 'SENT', 'OVERDUE')) AS open_count,
          COUNT(ch.id) FILTER (WHERE ch.status = 'OVERDUE')               AS overdue_count,
          COUNT(ch.id) FILTER (WHERE ch.status = 'PAID')                  AS paid_count
@@ -145,11 +149,11 @@ router.post(
     // aplicado via índice único parcial (ver migração 006); erro 23505 vira
     // 409 amigável em rethrowDuplicate.
     const row = await queryOne<ClientRow>(
-      `INSERT INTO clients (user_id, name, phone, email, document, notes)
-       VALUES ($1, $2, $3, $4, $5, $6)
-       RETURNING id, name, phone, email, document, notes, created_at,
+      `INSERT INTO clients (user_id, name, phone, email, document, notes, whatsapp_opt_out)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       RETURNING id, name, phone, email, document, notes, whatsapp_opt_out, created_at,
                  '0' AS open_count, '0' AS overdue_count, '0' AS paid_count`,
-      [req.userId, data.name, data.phone, data.email ?? null, data.document ?? null, data.notes ?? null]
+      [req.userId, data.name, data.phone, data.email ?? null, data.document ?? null, data.notes ?? null, data.whatsappOptOut]
     ).catch(rethrowDuplicate);
     res.status(201).json(serialize(row!));
   })
@@ -162,10 +166,10 @@ router.put(
     const data = clientSchema.parse(req.body);
     const updated = await queryOne<{ id: string }>(
       `UPDATE clients
-          SET name = $3, phone = $4, email = $5, document = $6, notes = $7
+          SET name = $3, phone = $4, email = $5, document = $6, notes = $7, whatsapp_opt_out = $8
         WHERE id = $2 AND user_id = $1 AND deleted_at IS NULL
         RETURNING id`,
-      [req.userId, id, data.name, data.phone, data.email ?? null, data.document ?? null, data.notes ?? null]
+      [req.userId, id, data.name, data.phone, data.email ?? null, data.document ?? null, data.notes ?? null, data.whatsappOptOut]
     ).catch(rethrowDuplicate);
     if (!updated) throw notFound('Cliente não encontrado');
     const row = await queryOne<ClientRow>(`${LIST_SQL} AND c.id = $2 GROUP BY c.id`, [

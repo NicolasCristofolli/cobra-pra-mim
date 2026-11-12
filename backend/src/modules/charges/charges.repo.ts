@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { query, queryOne } from '../../db';
 import { parseISODate, todayISO, type RecurrenceKind } from '../../lib/dates';
+import { publicInvoiceUrl } from '../../lib/template';
 
 // SENT = mensagem de cobrança já enviada no WhatsApp, aguardando pagamento.
 export type ChargeStatus = 'PENDING' | 'SENT' | 'PAID' | 'OVERDUE' | 'CANCELED';
@@ -27,15 +28,21 @@ export interface ChargeRow {
   invoice_url: string | null;
   last_notified_at: string | null;
   next_generated: boolean;
+  /** Token da página pública da fatura (/f/<token>). */
+  public_token: string;
+  /** Dia em que o Pix atual foi gerado (NULL = sem Pix ou anterior a esta coluna). */
+  pix_generated_on: string | null;
   created_at: string;
   client_name?: string;
   client_phone?: string;
+  client_opt_out?: boolean;
 }
 
 // LEFT JOIN: faturas de clientes excluídos (client_id NULL) continuam
 // aparecendo no histórico, com client_name/client_phone nulos.
 const BASE_SELECT = `
-  SELECT ch.*, cl.name AS client_name, cl.phone AS client_phone
+  SELECT ch.*, cl.name AS client_name, cl.phone AS client_phone,
+         cl.whatsapp_opt_out AS client_opt_out
     FROM charges ch
     LEFT JOIN clients cl ON cl.id = ch.client_id
 `;
@@ -60,6 +67,7 @@ export function serializeCharge(row: ChargeRow) {
     pixCopyPaste: row.pix_copy_paste,
     pixQrCodeUrl: row.pix_qr_code_url,
     invoiceUrl: row.invoice_url,
+    publicUrl: publicInvoiceUrl(row.public_token),
     lastNotifiedAt: row.last_notified_at,
     createdAt: row.created_at
   };
@@ -139,6 +147,7 @@ export async function updateCharge(
             pix_copy_paste    = CASE WHEN amount_cents <> $4 OR due_date <> $5::date THEN NULL ELSE pix_copy_paste END,
             pix_qr_code_url   = CASE WHEN amount_cents <> $4 OR due_date <> $5::date THEN NULL ELSE pix_qr_code_url END,
             invoice_url       = CASE WHEN amount_cents <> $4 OR due_date <> $5::date THEN NULL ELSE invoice_url END,
+            pix_generated_on  = CASE WHEN amount_cents <> $4 OR due_date <> $5::date THEN NULL ELSE pix_generated_on END,
             last_notified_at  = CASE WHEN amount_cents <> $4 OR due_date <> $5::date THEN NULL ELSE last_notified_at END,
             status            = CASE WHEN amount_cents <> $4 OR due_date <> $5::date THEN 'PENDING'::charge_status ELSE status END,
             updated_at = now()
@@ -314,6 +323,7 @@ export async function saveGatewayData(
             pix_copy_paste = $3,
             pix_qr_code_url = $4,
             invoice_url = $5,
+            pix_generated_on = $6::date,
             updated_at = now()
       WHERE id = $1`,
     [
@@ -321,8 +331,18 @@ export async function saveGatewayData(
       data.gatewayChargeId,
       data.pixCopyPaste ?? null,
       data.pixQrCodeUrl ?? null,
-      data.invoiceUrl ?? null
+      data.invoiceUrl ?? null,
+      todayISO()
     ]
+  );
+}
+
+/** Registra um lembrete da régua como enviado (idempotente). */
+export async function markReminderSent(chargeId: string, offsetDays: number): Promise<void> {
+  await query(
+    `INSERT INTO charge_reminders (charge_id, offset_days) VALUES ($1, $2)
+     ON CONFLICT (charge_id, offset_days) DO NOTHING`,
+    [chargeId, offsetDays]
   );
 }
 

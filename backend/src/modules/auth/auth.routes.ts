@@ -67,8 +67,8 @@ export default function authRouter(deps: Pick<AppDeps, 'mailer'>): Router {
       if (existing) throw new AppError('Este e-mail já está cadastrado', 409, 'EMAIL_TAKEN');
 
       const passwordHash = await hashPassword(password);
-      // A conta nasce SEM assinatura: o acesso às rotas de negócio só libera
-      // depois de escolher o plano e o webhook do Asaas confirmar o pagamento.
+      // A conta nasce em teste grátis (TRIAL_DAYS). Depois disso, o acesso só
+      // continua com um plano pago, confirmado pelo webhook do Asaas.
       const user = await withTransaction((tx) => createAccount(tx, { name, email, passwordHash }));
 
       setAuthCookie(res, signToken(user.id, user.token_version));

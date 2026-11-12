@@ -13,10 +13,12 @@ import platformWebhookRouter from './modules/billing/platform-webhook.routes';
 import clientsRoutes from './modules/clients/clients.routes';
 import chargesRouter from './modules/charges/charges.routes';
 import dashboardRoutes from './modules/dashboard/dashboard.routes';
-import settingsRoutes from './modules/settings/settings.routes';
+import settingsRouter from './modules/settings/settings.routes';
+import publicRouter from './modules/public/public.routes';
 import webhooksRouter from './modules/webhooks/webhooks.routes';
 import whatsappRoutes from './modules/whatsapp/whatsapp.routes';
 import { defaultDeps, type AppDeps } from './services/deps';
+import { deepHealth } from './services/health';
 
 /**
  * Fábrica do app Express. Os testes injetam `deps` fake (gateway/WhatsApp)
@@ -38,6 +40,17 @@ export function createApp(deps: AppDeps = defaultDeps): Express {
     res.json({ ok: true, service: 'cobra-pra-mim-api' });
   });
 
+  // Para monitor externo: 503 se o banco não responde ou se o motor de
+  // cobrança falhou / não roda há mais de 26h.
+  app.get('/health/deep', (_req, res, next) => {
+    deepHealth()
+      .then((health) => res.status(health.ok ? 200 : 503).json(health))
+      .catch(next);
+  });
+
+  // Página pública da fatura (sem login; identificada por token aleatório).
+  app.use('/public', publicRouter());
+
   // Webhooks: chamados servidor a servidor pelos gateways (token próprio).
   app.use('/webhooks/platform', platformWebhookRouter());
   app.use('/webhooks', webhooksRouter(deps));
@@ -58,7 +71,7 @@ export function createApp(deps: AppDeps = defaultDeps): Express {
   app.use('/clients', paid, clientsRoutes);
   app.use('/charges', paid, chargesRouter(deps));
   app.use('/dashboard', paid, dashboardRoutes);
-  app.use('/settings', paid, settingsRoutes);
+  app.use('/settings', paid, settingsRouter(deps));
   app.use('/whatsapp', paid, whatsappRoutes);
 
   app.use(errorHandler);

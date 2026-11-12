@@ -135,7 +135,14 @@ export default function ConfiguracoesPage() {
         body: JSON.stringify(payload)
       });
       hydrate(updated);
-      push('success', 'Configurações salvas.');
+      if (updated.webhookAutoConfig?.status === 'configured') {
+        push('success', 'Configurações salvas. O webhook de pagamento já foi cadastrado no Asaas automaticamente.');
+      } else if (updated.webhookAutoConfig?.status === 'failed') {
+        push('success', 'Configurações salvas.');
+        push('error', 'Não foi possível cadastrar o webhook no Asaas automaticamente. Siga o passo a passo abaixo para configurar à mão.');
+      } else {
+        push('success', 'Configurações salvas.');
+      }
     } catch (error) {
       push('error', (error as Error).message);
     } finally {
@@ -151,7 +158,12 @@ export default function ConfiguracoesPage() {
       });
       hydrate(updated);
       setRotateOpen(false);
-      push('success', 'Novo segredo gerado. Atualize no painel do seu gateway.');
+      push(
+        'success',
+        updated.webhookAutoConfig?.status === 'configured'
+          ? 'Novo segredo gerado e já atualizado no Asaas.'
+          : 'Novo segredo gerado. Atualize no painel do seu gateway.'
+      );
     } catch (error) {
       push('error', (error as Error).message);
     } finally {
@@ -370,6 +382,14 @@ export default function ConfiguracoesPage() {
             🔒 Cada conta tem a sua própria instância de WhatsApp, criada e isolada pelo
             servidor. Não é possível usar o número de outra pessoa: o QR Code exibido aqui
             conecta exclusivamente a sua conta.
+          </p>
+          <p className="rounded-xl bg-flame-50 px-3 py-2.5 text-xs leading-relaxed text-flame-700 ring-1 ring-inset ring-flame-100">
+            ⚠️ <strong>Cuide do seu número.</strong> A conexão por QR Code funciona como o
+            WhatsApp Web e não é um canal oficial do WhatsApp: números que enviam muitas
+            mensagens ou recebem denúncias podem ser bloqueados. Por isso o sistema espaça os
+            envios, respeita um limite diário (ajustável em <Link href="/mensagens" className="font-semibold underline">Mensagens</Link>) e
+            permite marcar clientes que não querem receber cobranças. Envie apenas para
+            clientes que conhecem você.
           </p>
         </div>
       </Card>

@@ -23,12 +23,27 @@ export interface CreatePixChargeResult {
 
 export interface GatewayPort {
   readonly provider: 'ASAAS' | 'MERCADO_PAGO';
+  /** true = o Pix deixa de ser pagável depois do dia do vencimento (Mercado Pago). */
+  readonly pixExpiresOnDueDate?: boolean;
   createPixCharge(input: CreatePixChargeInput): Promise<CreatePixChargeResult>;
   /**
    * Cancela uma cobrança ainda não paga no gateway (ex.: a fatura foi editada
    * e o Pix antigo, com o valor antigo, não pode mais ser pago).
    */
   cancelCharge(gatewayChargeId: string): Promise<void>;
+  /**
+   * Cadastra (ou atualiza) no gateway o webhook de pagamento do sistema, para
+   * o usuário não precisar colar URL e token à mão. Opcional: só os gateways
+   * que oferecem isso por API implementam.
+   */
+  registerWebhook?(input: RegisterWebhookInput): Promise<void>;
+}
+
+export interface RegisterWebhookInput {
+  url: string;
+  authToken: string;
+  /** E-mail que o gateway avisa se a fila do webhook travar. */
+  email: string;
 }
 
 /** Limite de espera das chamadas aos gateways: sem isso uma conexão pendurada segura o motor. */

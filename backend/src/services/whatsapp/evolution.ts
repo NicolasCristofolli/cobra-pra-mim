@@ -28,4 +28,18 @@ export class EvolutionWhatsApp implements WhatsAppPort {
       throw new Error(`Evolution API ${response.status}: ${body.slice(0, 300)}`);
     }
   }
+
+  async isConnected(): Promise<boolean> {
+    const url = `${this.baseUrl.replace(/\/$/, '')}/instance/connectionState/${encodeURIComponent(
+      this.instance
+    )}`;
+    const response = await fetch(url, {
+      headers: { apikey: this.apiKey },
+      signal: AbortSignal.timeout(15_000)
+    });
+    if (response.status === 404) return false; // instância não existe mais
+    if (!response.ok) throw new Error(`Evolution API ${response.status} ao consultar a conexão`);
+    const data = (await response.json()) as { instance?: { state?: string } };
+    return data.instance?.state === 'open';
+  }
 }

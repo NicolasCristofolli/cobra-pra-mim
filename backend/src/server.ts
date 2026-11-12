@@ -5,8 +5,30 @@ import { closePool, getPool } from './db';
 import { runMigrations } from './db/migrate';
 import { purgeOldResetTokens } from './modules/auth/auth.service';
 import { encrypt } from './lib/crypto';
-import { runBillingCycle, stopBillingCycle } from './services/billing-engine';
+import { query } from './db';
+import { todayISO } from './lib/dates';
+import { recordEngineRun, runBillingCycle, stopBillingCycle } from './services/billing-engine';
 import { defaultDeps } from './services/deps';
+
+/** E-mail para os administradores da plataforma (falhas que precisam de gente). */
+async function alertAdmins(subject: string, text: string): Promise<void> {
+  try {
+    const admins = await query<{ email: string }>(`SELECT email FROM users WHERE role = 'ADMIN'`);
+    for (const admin of admins) {
+      await defaultDeps.mailer.send({
+        to: admin.email,
+        subject: `[Cobra pra mim] ${subject}`,
+        text,
+        html: `<pre style="font-family:inherit;white-space:pre-wrap">${text.replace(
+          /[&<>]/g,
+          (char) => `&#${char.charCodeAt(0)};`
+        )}</pre>`
+      });
+    }
+  } catch (error) {
+    console.error('[alerta] não foi possível avisar os administradores:', error);
+  }
+}
 
 async function start(): Promise<void> {
   // Fail-fast: melhor cair no boot com mensagem clara do que em runtime.
@@ -53,12 +75,22 @@ async function start(): Promise<void> {
     cron.schedule(
       env.cronSchedule,
       async () => {
+        const today = todayISO();
         try {
           const report = await runBillingCycle(defaultDeps);
           console.log('[motor] ciclo concluído:', report);
+          await recordEngineRun(today, { ok: true, report });
           await purgeOldResetTokens();
         } catch (error) {
           console.error('[motor] ciclo falhou:', error);
+          const message = error instanceof Error ? error.stack ?? error.message : String(error);
+          await recordEngineRun(today, { ok: false, error: message }).catch(() => undefined);
+          await alertAdmins(
+            'O motor de cobrança falhou',
+            `O ciclo diário de cobranças de ${today} terminou com erro e pode não ter enviado ` +
+              `as mensagens do dia.\n\nErro:\n${message.slice(0, 1500)}\n\n` +
+              `Veja os detalhes no servidor: pm2 logs cobra-api`
+          );
         }
       },
       { timezone: env.appTz }

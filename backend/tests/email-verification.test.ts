@@ -53,8 +53,11 @@ describe('confirmação de e-mail', () => {
     expect(await verifiedAt('ana@example.com')).not.toBeNull();
 
     expect((await agent.get('/auth/me')).body.emailVerified).toBe(true);
-    // Agora passa do gate de e-mail e cai no de assinatura (402, sem plano)
-    expect((await agent.get('/clients')).status).toBe(402);
+    // Agora passa do gate de e-mail e entra no teste grátis de 7 dias
+    const afterVerify = await agent.get('/auth/me');
+    expect(afterVerify.body.access).toMatchObject({ state: 'FULL', reason: 'TRIAL' });
+    expect(afterVerify.body.subscription.status).toBe('TRIALING');
+    expect((await agent.get('/clients')).status).toBe(200);
   });
 
   it('o link só vale uma vez e reenviar invalida o anterior', async () => {

@@ -2,7 +2,8 @@ import {
   GATEWAY_TIMEOUT_MS,
   type CreatePixChargeInput,
   type CreatePixChargeResult,
-  type GatewayPort
+  type GatewayPort,
+  type RegisterWebhookInput
 } from './types';
 
 /**
@@ -95,5 +96,33 @@ export class AsaasGateway implements GatewayPort {
 
   async cancelCharge(gatewayChargeId: string): Promise<void> {
     await this.request(`/payments/${encodeURIComponent(gatewayChargeId)}`, { method: 'DELETE' });
+  }
+
+  /**
+   * Webhook de pagamento via API (POST/PUT /v3/webhooks). Se já existir um
+   * webhook apontando para a mesma URL, ele é atualizado (token novo,
+   * reativado) em vez de duplicado.
+   */
+  async registerWebhook(input: RegisterWebhookInput): Promise<void> {
+    const body = JSON.stringify({
+      name: 'Cobra pra mim',
+      url: input.url,
+      email: input.email,
+      enabled: true,
+      interrupted: false,
+      apiVersion: 3,
+      authToken: input.authToken,
+      sendType: 'SEQUENTIALLY',
+      events: ['PAYMENT_RECEIVED', 'PAYMENT_CONFIRMED']
+    });
+    const list = await this.request<{ data?: Array<{ id: string; url?: string }> }>(
+      '/webhooks?limit=100'
+    );
+    const existing = list.data?.find((hook) => hook.url === input.url);
+    if (existing) {
+      await this.request(`/webhooks/${encodeURIComponent(existing.id)}`, { method: 'PUT', body });
+    } else {
+      await this.request('/webhooks', { method: 'POST', body });
+    }
   }
 }

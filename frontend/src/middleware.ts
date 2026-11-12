@@ -74,7 +74,8 @@ function redirectTo(request: NextRequest, pathname: string, search?: Record<stri
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
   // Recuperação de senha funciona logado ou não, sem consultar a API.
-  if (PUBLIC_PAGES.includes(pathname)) {
+  // /f/<token>: página pública da fatura, aberta pelo cliente final sem login.
+  if (PUBLIC_PAGES.includes(pathname) || pathname.startsWith('/f/')) {
     const response = NextResponse.next();
     // O token do link não pode vazar para outros sites pelo Referer.
     response.headers.set('Referrer-Policy', 'no-referrer');

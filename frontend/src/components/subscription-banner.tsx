@@ -6,7 +6,8 @@ import { daysUntil, formatInstantDateBR } from '@/lib/format';
 import type { User } from '@/lib/types';
 import { cx } from './ui';
 
-const TRIAL_NOTICE_DAYS = 5;
+// O teste grátis dura 7 dias: o aviso fica visível durante todo o período.
+const TRIAL_NOTICE_DAYS = 7;
 
 /**
  * Aviso no topo do app. A assinatura atrasada ainda libera o acesso (carência),
@@ -31,7 +32,10 @@ export function SubscriptionBanner({ user }: { user: User }) {
     cta = 'Pagar agora';
   } else if (access.reason === 'TRIAL' && days <= TRIAL_NOTICE_DAYS) {
     tone = 'warning';
-    message = `Seu período de cortesia termina em ${when}. Escolha um plano para não perder o acesso.`;
+    message =
+      days <= 1
+        ? `Seu teste grátis termina amanhã (${when}). Escolha um plano para não perder o acesso.`
+        : `Você está no teste grátis: faltam ${days} dias (até ${when}). Escolha um plano para continuar depois.`;
     cta = 'Escolher plano';
   } else if (subscription?.status === 'CANCELED' && access.state === 'FULL') {
     tone = 'warning';

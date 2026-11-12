@@ -12,6 +12,7 @@ import {
  */
 export class MercadoPagoGateway implements GatewayPort {
   readonly provider = 'MERCADO_PAGO' as const;
+  readonly pixExpiresOnDueDate = true;
   private readonly baseUrl = 'https://api.mercadopago.com';
 
   constructor(private readonly accessToken: string) {}
@@ -23,8 +24,10 @@ export class MercadoPagoGateway implements GatewayPort {
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${this.accessToken}`,
-        // Idempotência: repetir a criação para a MESMA fatura não duplica.
-        'X-Idempotency-Key': input.externalReference
+        // Idempotência: repetir a criação para a MESMA fatura e o MESMO
+        // vencimento não duplica. O vencimento entra na chave porque uma
+        // fatura atrasada ganha um Pix novo (o anterior expirou).
+        'X-Idempotency-Key': `${input.externalReference}:${input.dueDate}`
       },
       body: JSON.stringify({
         transaction_amount: Number((input.amountCents / 100).toFixed(2)),

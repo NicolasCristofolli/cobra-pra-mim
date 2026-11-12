@@ -70,6 +70,8 @@ export interface Client {
   email: string | null;
   document: string | null;
   notes: string | null;
+  /** true = cliente pediu para não receber mensagens no WhatsApp. */
+  whatsappOptOut: boolean;
   status: ClientStatus;
   openCharges: number;
   overdueCharges: number;
@@ -99,6 +101,8 @@ export interface Charge {
   pixCopyPaste: string | null;
   pixQrCodeUrl: string | null;
   invoiceUrl: string | null;
+  /** Página pública da fatura (link para enviar ao cliente). */
+  publicUrl: string;
   paidAt: string | null;
   lastNotifiedAt: string | null;
   createdAt: string;
@@ -122,6 +126,10 @@ export interface Metrics {
   statusCounts: { paid: number; open: number; overdue: number };
   clientsTotal: number;
   clientsOverdue: number;
+  /** O motor encontrou o WhatsApp desconectado: as cobranças não estão saindo. */
+  whatsappDisconnected: boolean;
+  /** Envios que falharam nas últimas 24 horas. */
+  failedSends24h: number;
   mrrCents: number;
   projection30dCents: number;
 }
@@ -145,6 +153,29 @@ export interface Settings {
   webhookUrl: string;
   messageTemplate: string;
   paidTemplate: string;
+  /** Régua de cobrança: lembretes antes e depois do vencimento. */
+  reminderTemplate: string;
+  overdueTemplate: string;
+  reminderDaysBefore: number[];
+  reminderDaysAfter: number[];
+  /** Teto de mensagens automáticas por dia (proteção do número). */
+  dailyMessageLimit: number;
+  /** Resultado do cadastro automático do webhook no gateway (só ao salvar a chave). */
+  webhookAutoConfig: { status: 'configured' } | { status: 'failed'; error: string } | null;
+}
+
+/** Fatura vista pelo cliente final na página pública (/f/<token>). */
+export interface PublicCharge {
+  sellerName: string;
+  clientFirstName: string | null;
+  description: string;
+  amountCents: number;
+  dueDate: string;
+  status: 'PENDING' | 'PAID' | 'OVERDUE' | 'CANCELED';
+  paidAt: string | null;
+  pixCopyPaste: string | null;
+  pixQrCodeUrl: string | null;
+  invoiceUrl: string | null;
 }
 
 /** Estado da conexão do WhatsApp (GET /whatsapp/status). */

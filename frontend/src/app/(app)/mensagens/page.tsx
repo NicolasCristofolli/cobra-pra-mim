@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { CheckCircle2, Clock, MessageSquareText, Send } from 'lucide-react';
+import { AlarmClock, BellRing, CheckCircle2, Clock, MessageSquareText, Send, ShieldCheck } from 'lucide-react';
 import { useToast } from '@/components/toast';
 import {
   Avatar,
@@ -10,6 +10,7 @@ import {
   ChargeBadge,
   EmptyState,
   Field,
+  Input,
   Spinner,
   Textarea
 } from '@/components/ui';
@@ -22,8 +23,26 @@ const TEMPLATE_VARS = [
   '{valor}',
   '{data_vencimento}',
   '{descricao}',
-  '{link_pix}'
+  '{link_pix}',
+  '{link_fatura}'
 ] as const;
+
+/** "3, 7" → [3, 7]. Devolve null se houver algo que não seja um dia de 1 a 60. */
+function parseDays(text: string): number[] | null {
+  const parts = text
+    .split(/[,;\s]+/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  const days: number[] = [];
+  for (const part of parts) {
+    if (!/^\d+$/.test(part)) return null;
+    const day = Number(part);
+    if (day < 1 || day > 60) return null;
+    if (!days.includes(day)) days.push(day);
+  }
+  if (days.length > 5) return null;
+  return days.sort((a, b) => a - b);
+}
 
 /** Preview local com os mesmos placeholders do backend. */
 function renderPreview(template: string): string {
@@ -37,7 +56,8 @@ function renderPreview(template: string): string {
     valor: formatBRL(15000),
     data_vencimento: formatDateBR(iso),
     descricao: 'Mensalidade',
-    link_pix: '00020126580014BR.GOV.BCB.PIX...DEMO'
+    link_pix: '00020126580014BR.GOV.BCB.PIX...DEMO',
+    link_fatura: 'https://cobrapramim.cloud/f/3f9a…'
   };
   return template.replace(/\{(\w+)\}/g, (_, key: string) => sample[key] ?? '');
 }
@@ -74,16 +94,28 @@ export default function MensagensPage() {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [messageTemplate, setMessageTemplate] = useState('');
   const [paidTemplate, setPaidTemplate] = useState('');
+  const [reminderTemplate, setReminderTemplate] = useState('');
+  const [overdueTemplate, setOverdueTemplate] = useState('');
+  const [daysBefore, setDaysBefore] = useState('');
+  const [daysAfter, setDaysAfter] = useState('');
+  const [dailyLimit, setDailyLimit] = useState('150');
+
+  function hydrate(data: Settings) {
+    setSettings(data);
+    setMessageTemplate(data.messageTemplate);
+    setPaidTemplate(data.paidTemplate);
+    setReminderTemplate(data.reminderTemplate);
+    setOverdueTemplate(data.overdueTemplate);
+    setDaysBefore(data.reminderDaysBefore.join(', '));
+    setDaysAfter(data.reminderDaysAfter.join(', '));
+    setDailyLimit(String(data.dailyMessageLimit));
+  }
   const [saving, setSaving] = useState(false);
   const [sentLog, setSentLog] = useState<Charge[] | null>(null);
 
   useEffect(() => {
     api<Settings>('/settings')
-      .then((data) => {
-        setSettings(data);
-        setMessageTemplate(data.messageTemplate);
-        setPaidTemplate(data.paidTemplate);
-      })
+      .then(hydrate)
       .catch((error) => push('error', (error as Error).message));
 
     // Histórico real: cobranças que já receberam notificação no WhatsApp.
@@ -100,17 +132,34 @@ export default function MensagensPage() {
   }, [push]);
 
   async function save() {
+    const reminderDaysBefore = parseDays(daysBefore);
+    const reminderDaysAfter = parseDays(daysAfter);
+    if (!reminderDaysBefore || !reminderDaysAfter) {
+      push('error', 'Régua inválida: use até 5 números de 1 a 60 separados por vírgula (ex.: 3, 7).');
+      return;
+    }
+    const dailyMessageLimit = Number(dailyLimit);
+    if (!Number.isInteger(dailyMessageLimit) || dailyMessageLimit < 1 || dailyMessageLimit > 1000) {
+      push('error', 'O limite diário precisa ser um número entre 1 e 1000.');
+      return;
+    }
     setSaving(true);
     try {
-      // PUT parcial: só os templates — as chaves de gateway ficam intactas.
+      // PUT parcial: só mensagens e régua — as chaves de gateway ficam intactas.
       const updated = await api<Settings>('/settings', {
         method: 'PUT',
-        body: JSON.stringify({ messageTemplate, paidTemplate })
+        body: JSON.stringify({
+          messageTemplate,
+          paidTemplate,
+          reminderTemplate,
+          overdueTemplate,
+          reminderDaysBefore,
+          reminderDaysAfter,
+          dailyMessageLimit
+        })
       });
-      setSettings(updated);
-      setMessageTemplate(updated.messageTemplate);
-      setPaidTemplate(updated.paidTemplate);
-      push('success', 'Templates salvos.');
+      hydrate(updated);
+      push('success', 'Mensagens e régua de cobrança salvas.');
     } catch (error) {
       push('error', (error as Error).message);
     } finally {
@@ -132,15 +181,97 @@ export default function MensagensPage() {
         <div>
           <h1 className="text-xl font-bold tracking-tight text-sand-900">Mensagens</h1>
           <p className="mt-1 text-[13px] text-sand-600">
-            Templates automáticos enviados por WhatsApp.
+            Régua de cobrança e modelos das mensagens enviadas por WhatsApp.
           </p>
         </div>
         <Button size="sm" onClick={save} loading={saving}>
-          Salvar templates
+          Salvar alterações
         </Button>
       </header>
 
+      {/* Régua de cobrança */}
+      <Card className="p-5">
+        <div className="mb-4 flex items-center gap-2.5">
+          <span className="flex h-[30px] w-[30px] items-center justify-center rounded-full bg-primary-50">
+            <AlarmClock className="h-[15px] w-[15px] text-primary-600" />
+          </span>
+          <div>
+            <h2 className="text-[13.5px] font-bold text-sand-900">Régua de cobrança</h2>
+            <p className="text-xs text-sand-500">
+              Quando cada cliente recebe mensagem. A cobrança do dia do vencimento sai sempre.
+            </p>
+          </div>
+        </div>
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+          <Field
+            label="Lembrar antes do vencimento (dias)"
+            hint="Ex.: 3 = lembrete 3 dias antes. Vazio = não lembrar antes."
+          >
+            <Input
+              value={daysBefore}
+              onChange={(event) => setDaysBefore(event.target.value)}
+              placeholder="3"
+              inputMode="numeric"
+            />
+          </Field>
+          <Field
+            label="Cobrar depois do vencimento (dias)"
+            hint="Ex.: 3, 7 = lembretes com 3 e 7 dias de atraso. Vazio = não cobrar depois."
+          >
+            <Input
+              value={daysAfter}
+              onChange={(event) => setDaysAfter(event.target.value)}
+              placeholder="3, 7"
+              inputMode="numeric"
+            />
+          </Field>
+          <Field
+            label="Limite de mensagens por dia"
+            hint="Protege seu número: ao atingir o limite, o restante sai no dia seguinte."
+          >
+            <Input
+              value={dailyLimit}
+              onChange={(event) => setDailyLimit(event.target.value.replace(/\D/g, ''))}
+              placeholder="150"
+              inputMode="numeric"
+            />
+          </Field>
+        </div>
+        <p className="mt-3 flex items-start gap-2 text-xs leading-relaxed text-sand-500">
+          <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-leaf-600" />
+          Faturas pagas ou canceladas saem da régua na hora, e clientes marcados com “Não enviar
+          mensagens” nunca recebem.
+        </p>
+      </Card>
+
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+        <Card className="p-5">
+          <div className="mb-3 flex items-center gap-2.5">
+            <span className="flex h-[30px] w-[30px] items-center justify-center rounded-full bg-primary-50">
+              <BellRing className="h-[15px] w-[15px] text-primary-600" />
+            </span>
+            <div>
+              <h2 className="text-[13.5px] font-bold text-sand-900">Lembrete antes do vencimento</h2>
+              <p className="text-xs text-sand-500">Enviado nos dias configurados na régua.</p>
+            </div>
+          </div>
+          <div className="space-y-3">
+            <Field>
+              <Textarea
+                rows={6}
+                value={reminderTemplate}
+                onChange={(event) => setReminderTemplate(event.target.value)}
+              />
+            </Field>
+            <VariableChips
+              onPick={(variable) =>
+                setReminderTemplate((current) => `${current} ${variable}`.trimStart())
+              }
+            />
+            <WhatsAppPreview text={renderPreview(reminderTemplate)} />
+          </div>
+        </Card>
+
         <Card className="p-5">
           <div className="mb-3 flex items-center gap-2.5">
             <span className="flex h-[30px] w-[30px] items-center justify-center rounded-full bg-primary-50">
@@ -165,6 +296,33 @@ export default function MensagensPage() {
               }
             />
             <WhatsAppPreview text={renderPreview(messageTemplate)} />
+          </div>
+        </Card>
+
+        <Card className="p-5">
+          <div className="mb-3 flex items-center gap-2.5">
+            <span className="flex h-[30px] w-[30px] items-center justify-center rounded-full bg-danger-50">
+              <AlarmClock className="h-[15px] w-[15px] text-danger-600" />
+            </span>
+            <div>
+              <h2 className="text-[13.5px] font-bold text-sand-900">Cobrança em atraso</h2>
+              <p className="text-xs text-sand-500">Enviada depois do vencimento, nos dias da régua.</p>
+            </div>
+          </div>
+          <div className="space-y-3">
+            <Field>
+              <Textarea
+                rows={6}
+                value={overdueTemplate}
+                onChange={(event) => setOverdueTemplate(event.target.value)}
+              />
+            </Field>
+            <VariableChips
+              onPick={(variable) =>
+                setOverdueTemplate((current) => `${current} ${variable}`.trimStart())
+              }
+            />
+            <WhatsAppPreview text={renderPreview(overdueTemplate)} />
           </div>
         </Card>
 
@@ -239,8 +397,9 @@ export default function MensagensPage() {
         Variáveis: <code className="font-mono">{'{nome_cliente}'}</code>,{' '}
         <code className="font-mono">{'{valor}'}</code>,{' '}
         <code className="font-mono">{'{data_vencimento}'}</code>,{' '}
-        <code className="font-mono">{'{descricao}'}</code> e{' '}
-        <code className="font-mono">{'{link_pix}'}</code> (copia-e-cola do Pix).
+        <code className="font-mono">{'{descricao}'}</code>,{' '}
+        <code className="font-mono">{'{link_pix}'}</code> (copia-e-cola do Pix) e{' '}
+        <code className="font-mono">{'{link_fatura}'}</code> (página da fatura com QR Code).
       </p>
     </div>
   );

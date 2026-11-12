@@ -1,10 +1,17 @@
 import { query, queryOne } from '../db';
-import { nextDueDate, todayISO } from '../lib/dates';
+import { env } from '../config/env';
+import { nextDueDate, parseISODate, todayISO } from '../lib/dates';
 import { normalizePhone } from '../lib/format';
-import { buildChargeVars, renderTemplate } from '../lib/template';
+import {
+  buildChargeVars,
+  DEFAULT_OVERDUE_TEMPLATE,
+  DEFAULT_REMINDER_TEMPLATE,
+  renderTemplate
+} from '../lib/template';
 import {
   findChargeById,
   markNotified,
+  markReminderSent,
   saveGatewayData,
   type ChargeRow
 } from '../modules/charges/charges.repo';
@@ -20,11 +27,22 @@ export interface CycleReport {
   today: string;
   generated: number;      // faturas recorrentes materializadas
   overdueMarked: number;  // pendentes que viraram atrasadas
-  notified: number;       // mensagens de cobrança enviadas
+  notified: number;       // mensagens enviadas (cobrança do dia + lembretes da régua)
   notifyFailed: number;   // falhas de envio/gateway (ficam para retry/manual)
   usersSkipped: number;   // usuários sem settings (nunca deveria ocorrer)
   blockedSkipped: number; // faturas de usuários com assinatura bloqueada (não enviadas)
+  limitSkipped: number;   // não enviadas porque o usuário atingiu o limite diário do chip
+  disconnectedSkipped: number; // não enviadas porque o WhatsApp do usuário está desconectado
 }
+
+/**
+ * Que mensagem a fatura recebe hoje:
+ *  - CHARGE: a cobrança principal (dia do vencimento, ou atrasada que nunca
+ *    recebeu mensagem);
+ *  - REMINDER: lembrete ANTES do vencimento (régua);
+ *  - OVERDUE_REMINDER: lembrete DEPOIS do vencimento (régua).
+ */
+export type NotifyStage = 'CHARGE' | 'REMINDER' | 'OVERDUE_REMINDER';
 
 /** Quantos usuários (chips) o ciclo notifica ao mesmo tempo. */
 const NOTIFY_CONCURRENCY = 5;
@@ -52,10 +70,31 @@ interface NotifiableRow extends ChargeRow {
   client_document: string | null;
 }
 
+const NOTIFIABLE_SELECT = `
+  SELECT ch.*, cl.name      AS client_name,
+         cl.phone           AS client_phone,
+         cl.email           AS client_email,
+         cl.document        AS client_document,
+         cl.whatsapp_opt_out AS client_opt_out
+    FROM charges ch
+    JOIN clients cl ON cl.id = ch.client_id`;
+
+/** Dias de `from` até `to` (positivo se `to` é depois). */
+function daysBetween(from: string, to: string): number {
+  const a = parseISODate(from);
+  const b = parseISODate(to);
+  return Math.round((Date.UTC(b.y, b.m - 1, b.d) - Date.UTC(a.y, a.m - 1, a.d)) / 86_400_000);
+}
+
+function stageOf(charge: ChargeRow, today: string): NotifyStage {
+  if (charge.last_notified_at === null && charge.due_date <= today) return 'CHARGE';
+  return charge.due_date > today ? 'REMINDER' : 'OVERDUE_REMINDER';
+}
+
 async function insertLog(entry: {
   userId: string;
   chargeId: string | null;
-  kind: 'CHARGE' | 'PAYMENT_CONFIRMED';
+  kind: NotifyStage | 'PAYMENT_CONFIRMED';
   phone: string;
   message: string;
   success: boolean;
@@ -77,14 +116,22 @@ async function insertLog(entry: {
 }
 
 /**
- * Garante que a fatura tem um Pix no gateway. Atualiza o registro e devolve
- * os campos novos. Lança se o gateway falhar (o chamador decide o destino).
+ * Garante que a fatura tem um Pix pagável no gateway. Atualiza o registro e
+ * devolve os campos novos. Lança se o gateway falhar (o chamador decide o destino).
  */
 async function ensurePix(
   gateway: GatewayPort,
   charge: NotifiableRow
 ): Promise<Pick<ChargeRow, 'pix_copy_paste' | 'pix_qr_code_url' | 'invoice_url' | 'gateway_charge_id'>> {
-  if (charge.gateway_charge_id) {
+  const today = todayISO();
+  // Gateway cujo Pix morre no fim do dia do vencimento (Mercado Pago): uma
+  // fatura atrasada com Pix gerado em outro dia precisa de um Pix novo.
+  const expired =
+    gateway.pixExpiresOnDueDate === true &&
+    charge.due_date < today &&
+    (charge.pix_generated_on === null || charge.pix_generated_on < today);
+
+  if (charge.gateway_charge_id && !expired) {
     return {
       gateway_charge_id: charge.gateway_charge_id,
       pix_copy_paste: charge.pix_copy_paste,
@@ -95,7 +142,6 @@ async function ensurePix(
 
   // Fatura já vencida: os gateways recusam Pix com vencimento no passado,
   // então o Pix nasce vencendo hoje (a fatura continua com a data original).
-  const today = todayISO();
   const result = await gateway.createPixCharge({
     amountCents: charge.amount_cents,
     dueDate: charge.due_date < today ? today : charge.due_date,
@@ -217,22 +263,40 @@ async function markOverdue(today: string): Promise<number> {
 }
 
 /**
- * PASSO 3 — Notifica: tudo que vence HOJE + atrasadas que nunca receberam
- * mensagem (resiliência a falhas transitórias de envio em dias anteriores).
+ * PASSO 3 — Quem recebe mensagem hoje:
+ *  a) cobrança principal: vence HOJE, ou está atrasada e nunca recebeu
+ *     mensagem (resiliência a falhas de envio em dias anteriores);
+ *  b) régua, antes do vencimento: faltam exatamente N dias, com N em
+ *     settings.reminder_days_before;
+ *  c) régua, depois do vencimento: passaram exatamente N dias, com N em
+ *     settings.reminder_days_after (só para quem já recebeu a principal).
+ * Cada lembrete da régua sai uma única vez (charge_reminders). Clientes
+ * excluídos ou que pediram para não receber mensagens ficam de fora.
  */
 async function findChargesToNotify(today: string): Promise<NotifiableRow[]> {
   return query<NotifiableRow>(
-    `SELECT ch.*, cl.name  AS client_name,
-            cl.phone       AS client_phone,
-            cl.email       AS client_email,
-            cl.document    AS client_document
-       FROM charges ch
-       JOIN clients cl ON cl.id = ch.client_id
-      WHERE ch.last_notified_at IS NULL
-        AND cl.deleted_at IS NULL -- cliente excluído não recebe cobrança
+    `${NOTIFIABLE_SELECT}
+       LEFT JOIN settings s ON s.user_id = ch.user_id
+      WHERE cl.deleted_at IS NULL
+        AND cl.whatsapp_opt_out = FALSE
         AND (
-              (ch.status = 'PENDING' AND ch.due_date = $1)
-           OR  ch.status = 'OVERDUE'
+              ( ch.last_notified_at IS NULL
+                AND ( (ch.status = 'PENDING' AND ch.due_date = $1::date)
+                      OR ch.status = 'OVERDUE' ) )
+           OR ( ch.status IN ('PENDING', 'SENT')
+                AND ch.due_date > $1::date
+                AND (ch.due_date - $1::date) = ANY (s.reminder_days_before)
+                AND NOT EXISTS (
+                      SELECT 1 FROM charge_reminders r
+                       WHERE r.charge_id = ch.id AND r.offset_days = ($1::date - ch.due_date)
+                    ) )
+           OR ( ch.status = 'OVERDUE'
+                AND ch.last_notified_at IS NOT NULL
+                AND ($1::date - ch.due_date) = ANY (s.reminder_days_after)
+                AND NOT EXISTS (
+                      SELECT 1 FROM charge_reminders r
+                       WHERE r.charge_id = ch.id AND r.offset_days = ($1::date - ch.due_date)
+                    ) )
             )
       ORDER BY ch.user_id, ch.due_date`,
     [today]
@@ -247,10 +311,18 @@ interface SendOutcome {
   reason?: string;
 }
 
+function templateFor(settings: SettingsRow, stage: NotifyStage): string {
+  if (stage === 'REMINDER') return settings.reminder_template ?? DEFAULT_REMINDER_TEMPLATE;
+  if (stage === 'OVERDUE_REMINDER') return settings.overdue_template ?? DEFAULT_OVERDUE_TEMPLATE;
+  return settings.message_template;
+}
+
 async function sendChargeMessage(
   deps: AppDeps,
   settings: SettingsRow,
-  charge: NotifiableRow
+  charge: NotifiableRow,
+  stage: NotifyStage,
+  today: string
 ): Promise<SendOutcome> {
   // 1) Pix primeiro: se há gateway configurado, a mensagem DEVE ir com o
   //    copia-e-cola. Falha de gateway → não envia mensagem "manca"; fica
@@ -272,7 +344,7 @@ async function sendChargeMessage(
       await insertLog({
         userId: charge.user_id,
         chargeId: charge.id,
-        kind: 'CHARGE',
+        kind: stage,
         phone: charge.client_phone,
         message: '(mensagem não montada — falha no gateway)',
         success: false,
@@ -295,14 +367,15 @@ async function sendChargeMessage(
   }
 
   const message = renderTemplate(
-    settings.message_template,
+    templateFor(settings, stage),
     buildChargeVars({
       clientName: charge.client_name,
       amountCents: charge.amount_cents,
       dueDate: charge.due_date,
       description: charge.description,
       pixCopyPaste: pixFields.pix_copy_paste,
-      invoiceUrl: pixFields.invoice_url
+      invoiceUrl: pixFields.invoice_url,
+      publicToken: charge.public_token
     })
   );
 
@@ -311,19 +384,22 @@ async function sendChargeMessage(
     await insertLog({
       userId: charge.user_id,
       chargeId: charge.id,
-      kind: 'CHARGE',
+      kind: stage,
       phone: charge.client_phone,
       message,
       success: true
     });
-    await markNotified(charge.id);
+    // A cobrança principal marca a fatura como notificada (PENDING → SENT);
+    // lembrete da régua só registra que aquele dia já foi enviado.
+    if (stage === 'CHARGE') await markNotified(charge.id);
+    else await markReminderSent(charge.id, daysBetween(charge.due_date, today));
     return { sent: true, attempted: true };
   } catch (error) {
     const reason = `Falha no envio via WhatsApp: ${(error as Error).message}`;
     await insertLog({
       userId: charge.user_id,
       chargeId: charge.id,
-      kind: 'CHARGE',
+      kind: stage,
       phone: charge.client_phone,
       message,
       success: false,
@@ -331,6 +407,84 @@ async function sendChargeMessage(
     });
     return { sent: false, attempted: true, reason };
   }
+}
+
+/* ---------------- Saúde do WhatsApp ---------------- */
+
+/**
+ * PASSO 2.5 — Confere a conexão do WhatsApp de cada conta. Quando o chip cai
+ * (celular trocado, sessão encerrada no aparelho), marca
+ * settings.whatsapp_disconnected_at e avisa o dono por e-mail UMA vez; o
+ * painel mostra o alerta até a reconexão. Sem isso os envios falhariam em
+ * silêncio até alguém abrir o painel.
+ */
+async function checkWhatsappConnections(deps: AppDeps): Promise<void> {
+  const rows = await query<SettingsRow & { owner_name: string; owner_email: string }>(
+    `SELECT s.*, u.name AS owner_name, u.email AS owner_email
+       FROM settings s JOIN users u ON u.id = s.user_id
+      WHERE s.whatsapp_provider IS NOT NULL`
+  );
+  for (const row of rows) {
+    const whatsapp = deps.whatsappFactory(row);
+    if (!whatsapp?.isConnected) continue;
+    let connected: boolean;
+    try {
+      connected = await whatsapp.isConnected();
+    } catch (error) {
+      // Provedor fora do ar: não dá para concluir nada sobre este chip.
+      console.warn(`[motor] não foi possível consultar o WhatsApp de ${row.user_id}:`, error);
+      continue;
+    }
+
+    if (connected) {
+      if (row.whatsapp_disconnected_at) {
+        await query('UPDATE settings SET whatsapp_disconnected_at = NULL WHERE user_id = $1', [
+          row.user_id
+        ]);
+      }
+      continue;
+    }
+    if (row.whatsapp_disconnected_at) continue; // já avisado
+
+    await query('UPDATE settings SET whatsapp_disconnected_at = now() WHERE user_id = $1', [
+      row.user_id
+    ]);
+    const link = `${env.frontendOrigin.replace(/\/$/, '')}/configuracoes`;
+    const firstName = row.owner_name.split(' ')[0] ?? row.owner_name;
+    try {
+      await deps.mailer.send({
+        to: row.owner_email,
+        subject: 'Seu WhatsApp desconectou — Cobra pra mim',
+        text:
+          `Olá, ${firstName}!\n\n` +
+          `O WhatsApp conectado ao Cobra pra mim está desconectado, então as cobranças ` +
+          `automáticas não estão sendo enviadas aos seus clientes.\n\n` +
+          `Para voltar a enviar, reconecte lendo o QR Code em:\n${link}\n\n` +
+          `As cobranças que deixaram de sair hoje são enviadas no próximo ciclo depois da reconexão.`,
+        html:
+          `<p>Olá, ${firstName.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`)}!</p>` +
+          `<p>O WhatsApp conectado ao Cobra pra mim está <strong>desconectado</strong>, então as ` +
+          `cobranças automáticas não estão sendo enviadas aos seus clientes.</p>` +
+          `<p><a href="${link}" style="display:inline-block;padding:12px 20px;background:#3545bc;color:#fff;` +
+          `border-radius:10px;text-decoration:none;font-weight:600">Reconectar o WhatsApp</a></p>` +
+          `<p style="color:#666">As cobranças que deixaram de sair hoje são enviadas no próximo ` +
+          `ciclo depois da reconexão.</p>`
+      });
+    } catch (error) {
+      console.error(`[motor] falha ao avisar ${row.user_id} sobre o WhatsApp desconectado:`, error);
+    }
+  }
+}
+
+/** Mensagens automáticas já enviadas com sucesso hoje (fuso do app) por este usuário. */
+async function countSentToday(userId: string, today: string): Promise<number> {
+  const row = await queryOne<{ total: string }>(
+    `SELECT COUNT(*) AS total FROM notification_logs
+      WHERE user_id = $1 AND success
+        AND (created_at AT TIME ZONE $3)::date = $2::date`,
+    [userId, today, env.appTz]
+  );
+  return Number(row?.total ?? 0);
 }
 
 /**
@@ -358,11 +512,14 @@ async function runCycle(deps: AppDeps, today: string): Promise<CycleReport> {
     notified: 0,
     notifyFailed: 0,
     usersSkipped: 0,
-    blockedSkipped: 0
+    blockedSkipped: 0,
+    limitSkipped: 0,
+    disconnectedSkipped: 0
   };
 
   report.generated = await spawnRecurringCharges(today);
   report.overdueMarked = await markOverdue(today);
+  await checkWhatsappConnections(deps);
 
   const toNotify = await findChargesToNotify(today);
 
@@ -390,22 +547,41 @@ async function runCycle(deps: AppDeps, today: string): Promise<CycleReport> {
       report.usersSkipped += charges.length;
       return;
     }
+    // Chip desconectado (visto agora há pouco em checkWhatsappConnections):
+    // nem tenta. As cobranças principais continuam elegíveis para o próximo ciclo.
+    if (settings.whatsapp_disconnected_at) {
+      report.disconnectedSkipped += charges.length;
+      return;
+    }
+
+    // Proteção do chip: teto de mensagens automáticas por dia. Volume alto
+    // e repentino é o principal gatilho de banimento do número.
+    let sentToday = await countSentToday(userId, today);
 
     // Anti-spam: pausa (deps.interSendDelay) entre disparos consecutivos pelo
     // MESMO chip. Pulos que não tocam a Evolution (sem WhatsApp, falha de
     // gateway) não contam.
     let attemptedBefore = false;
-    for (const charge of charges) {
+    for (let index = 0; index < charges.length; index++) {
+      const charge = charges[index]!;
       // Desligamento em andamento (deploy/restart): para entre um envio e
       // outro. O que sobrou continua elegível e sai no próximo ciclo.
       if (stopRequested) return;
+      if (sentToday >= settings.daily_message_limit) {
+        report.limitSkipped += charges.length - index;
+        return;
+      }
       if (deps.interSendDelay && attemptedBefore) await deps.interSendDelay();
       if (stopRequested) return;
 
-      const outcome = await sendChargeMessage(deps, settings, charge);
+      const outcome = await sendChargeMessage(deps, settings, charge, stageOf(charge, today), today);
       if (outcome.attempted) attemptedBefore = true;
-      if (outcome.sent) report.notified++;
-      else report.notifyFailed++;
+      if (outcome.sent) {
+        report.notified++;
+        sentToday++;
+      } else {
+        report.notifyFailed++;
+      }
     }
   };
 
@@ -438,15 +614,21 @@ export async function notifyChargeNow(
   }
 
   const charge = await queryOne<NotifiableRow>(
-    `SELECT ch.*, cl.name AS client_name, cl.phone AS client_phone,
-            cl.email AS client_email, cl.document AS client_document
-       FROM charges ch JOIN clients cl ON cl.id = ch.client_id
+    `${NOTIFIABLE_SELECT}
       WHERE ch.user_id = $1 AND ch.id = $2 AND cl.deleted_at IS NULL`,
     [userId, chargeId]
   );
   if (!charge) return { sent: false, attempted: false, reason: 'Fatura não encontrada' };
+  if (charge.client_opt_out) {
+    return {
+      sent: false,
+      attempted: false,
+      reason: 'Este cliente pediu para não receber mensagens. Altere no cadastro do cliente para enviar.'
+    };
+  }
 
-  return sendChargeMessage(deps, settings, charge);
+  // Envio manual é sempre a cobrança principal (com o modelo de cobrança).
+  return sendChargeMessage(deps, settings, charge, 'CHARGE', todayISO());
 }
 
 /** Confirmação de pagamento no WhatsApp — disparada pelo webhook. */
@@ -467,6 +649,7 @@ export async function sendPaymentConfirmation(
 
   const charge = await findChargeById(userId, chargeId);
   if (!charge || !charge.client_name || !charge.client_phone) return;
+  if (charge.client_opt_out) return; // pediu para não receber mensagens
 
   const message = renderTemplate(
     settings.paid_template,
@@ -476,7 +659,8 @@ export async function sendPaymentConfirmation(
       dueDate: charge.due_date,
       description: charge.description,
       pixCopyPaste: charge.pix_copy_paste,
-      invoiceUrl: charge.invoice_url
+      invoiceUrl: charge.invoice_url,
+      publicToken: charge.public_token
     })
   );
 
@@ -501,4 +685,24 @@ export async function sendPaymentConfirmation(
       error: (error as Error).message
     });
   }
+}
+
+/* ---------------- Monitoramento ---------------- */
+
+/** Grava o resultado de uma execução do ciclo (consultado por /health/deep). */
+export async function recordEngineRun(
+  today: string,
+  result: { ok: true; report: CycleReport } | { ok: false; error: string }
+): Promise<void> {
+  await query(
+    `INSERT INTO engine_runs (ran_on, ok, report, error) VALUES ($1, $2, $3, $4)`,
+    [
+      today,
+      result.ok,
+      result.ok ? JSON.stringify(result.report) : null,
+      result.ok ? null : result.error.slice(0, 2000)
+    ]
+  );
+  // Histórico curto: 90 dias bastam para diagnóstico.
+  await query(`DELETE FROM engine_runs WHERE finished_at < now() - interval '90 days'`);
 }

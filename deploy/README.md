@@ -82,3 +82,21 @@ Um backup que fica só na VPS some junto com ela. Faça as duas coisas:
 1. Ative os snapshots automáticos no hPanel da Hostinger (VPS → Backups).
 2. Instale e configure o `rclone` (Backblaze B2, Google Drive etc.) e defina
    `BACKUP_RCLONE_REMOTE=remoto:pasta` na linha do crontab.
+
+## Monitoramento
+
+- `GET https://api.cobrapramim.cloud/health` — a API está no ar (usado pelo deploy).
+- `GET https://api.cobrapramim.cloud/health/deep` — responde **503** se o banco
+  não responde, se a última execução do motor de cobrança falhou ou se ele não
+  roda há mais de 26h. Aponte um monitor externo (UptimeRobot, Better Stack,
+  etc.) para esta URL, checando a cada 5 minutos, com alerta por e-mail/celular.
+- Se o ciclo diário terminar com erro, os administradores (`role = 'ADMIN'`)
+  recebem um e-mail na hora. O histórico fica na tabela `engine_runs`.
+- Quando o WhatsApp de um usuário desconecta, o dono da conta recebe um e-mail
+  e o painel mostra o alerta até a reconexão.
+
+## Testes
+
+A suíte **não** roda na VPS. Ela roda no GitHub Actions a cada push
+(`.github/workflows/ci.yml`). Localmente: `cd backend && npm test`, com um
+Postgres de teste em `DATABASE_URL` (padrão `localhost:5432/cobra_test`).

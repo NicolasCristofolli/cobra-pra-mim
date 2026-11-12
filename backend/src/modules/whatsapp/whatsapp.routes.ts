@@ -39,11 +39,14 @@ async function setWhatsappEnabled(userId: string, enabled: boolean): Promise<voi
     `UPDATE settings
         SET whatsapp_provider = $2::whatsapp_provider,
             whatsapp_instance = $3,
+            -- Reconectou (ou desconectou por vontade própria): o alerta some.
+            whatsapp_disconnected_at = NULL,
             updated_at = now()
       WHERE user_id = $1
         -- /whatsapp/status é consultado em polling: só grava quando muda.
         AND (whatsapp_provider IS DISTINCT FROM $2::whatsapp_provider
-             OR whatsapp_instance IS DISTINCT FROM $3)`,
+             OR whatsapp_instance IS DISTINCT FROM $3
+             OR whatsapp_disconnected_at IS NOT NULL)`,
     [userId, enabled ? 'EVOLUTION' : null, enabled ? instanceNameFor(userId) : null]
   );
 }

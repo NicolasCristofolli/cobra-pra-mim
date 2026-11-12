@@ -134,6 +134,15 @@ router.get(
       projectedRecurringCents += occurrences.length * head.amount_cents;
     }
 
+    // Alertas operacionais: chip desconectado e envios que falharam nas últimas 24h.
+    const alerts = await queryOne<{ disconnected: boolean; failed: string }>(
+      `SELECT (SELECT whatsapp_disconnected_at IS NOT NULL FROM settings WHERE user_id = $1) AS disconnected,
+              (SELECT COUNT(*) FROM notification_logs
+                WHERE user_id = $1 AND NOT success
+                  AND created_at > now() - interval '24 hours') AS failed`,
+      [req.userId]
+    );
+
     const maturedCount = Number(totals?.matured_count ?? 0);
     const maturedUnpaid = Number(totals?.matured_unpaid ?? 0);
 
@@ -159,6 +168,8 @@ router.get(
       },
       clientsTotal: Number(clientTotals?.total ?? 0),
       clientsOverdue: Number(clientTotals?.overdue ?? 0),
+      whatsappDisconnected: alerts?.disconnected === true,
+      failedSends24h: Number(alerts?.failed ?? 0),
       mrrCents,
       projection30dCents: Number(openInWindow?.amount ?? 0) + projectedRecurringCents
     });

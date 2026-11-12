@@ -12,6 +12,9 @@ export const BCRYPT_COST = 12;
 
 export type Role = 'USER' | 'ADMIN';
 
+/** Dias de teste grátis de uma conta nova. */
+export const TRIAL_DAYS = 7;
+
 export interface AccountRow {
   id: string;
   name: string;
@@ -45,6 +48,20 @@ export async function createAccount(
      VALUES ($1, $2, $3, $4)`,
     [created.id, encrypt(randomBytes(24).toString('hex')), DEFAULT_CHARGE_TEMPLATE, DEFAULT_PAID_TEMPLATE]
   );
+  // Teste grátis: a conta nova usa o sistema por TRIAL_DAYS antes de pagar
+  // (o acesso ainda depende de confirmar o e-mail). Sem plano ativo
+  // cadastrado, a conta nasce sem assinatura, como antes.
+  if (created.role !== 'ADMIN') {
+    await tx.query(
+      `INSERT INTO subscriptions (user_id, plan_id, status, trial_ends_at)
+       SELECT $1, p.id, 'TRIALING', now() + ($2 * interval '1 day')
+         FROM plans p
+        WHERE p.active
+        ORDER BY p.sort_order, p.price_cents
+        LIMIT 1`,
+      [created.id, TRIAL_DAYS]
+    );
+  }
   return created;
 }
 

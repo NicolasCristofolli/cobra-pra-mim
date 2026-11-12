@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import Link from 'next/link';
 import {
   AlertCircle,
   ArrowUpRight,
@@ -166,6 +167,44 @@ export default function DashboardPage() {
           <p className="mt-0.5 text-[13px] text-sand-600">Aqui está o resumo do seu negócio.</p>
         </div>
       </header>
+
+      {metrics.whatsappDisconnected && (
+        <div
+          role="alert"
+          className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-2xl bg-danger-50 px-4 py-3 text-sm text-danger-700 ring-1 ring-inset ring-danger-100"
+        >
+          <AlertCircle className="h-4 w-4 shrink-0" />
+          <p className="min-w-0 flex-1 font-semibold">
+            Seu WhatsApp está desconectado: as cobranças automáticas não estão sendo enviadas.
+          </p>
+          <Link
+            href="/configuracoes"
+            className="shrink-0 rounded-lg bg-danger-600 px-3 py-1.5 text-[13px] font-bold text-white shadow-sm hover:bg-danger-700"
+          >
+            Reconectar
+          </Link>
+        </div>
+      )}
+      {!metrics.whatsappDisconnected && metrics.failedSends24h > 0 && (
+        <div
+          role="status"
+          className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-2xl bg-flame-50 px-4 py-3 text-sm text-flame-700 ring-1 ring-inset ring-flame-100"
+        >
+          <AlertCircle className="h-4 w-4 shrink-0" />
+          <p className="min-w-0 flex-1 font-semibold">
+            {metrics.failedSends24h === 1
+              ? '1 envio falhou nas últimas 24 horas.'
+              : `${metrics.failedSends24h} envios falharam nas últimas 24 horas.`}{' '}
+            Confira a conexão do WhatsApp e a chave do gateway.
+          </p>
+          <Link
+            href="/configuracoes"
+            className="shrink-0 rounded-lg bg-flame-600 px-3 py-1.5 text-[13px] font-bold text-white shadow-sm hover:bg-flame-700"
+          >
+            Ver configurações
+          </Link>
+        </div>
+      )}
 
       {/* KPIs principais */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
