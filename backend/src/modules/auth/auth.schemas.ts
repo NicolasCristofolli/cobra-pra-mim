@@ -75,7 +75,13 @@ export const loginSchema = z
   .strict();
 
 export const registerSchema = z
-  .object({ name: nameSchema, email: emailSchema, password: newPasswordSchema })
+  .object({
+    name: nameSchema,
+    email: emailSchema,
+    password: newPasswordSchema,
+    // Aceite dos Termos de Uso e da Política de Privacidade (marcado na tela).
+    acceptTerms: z.boolean().optional()
+  })
   .strict()
   .superRefine((data, ctx) => {
     const local = data.email.split('@')[0] ?? '';

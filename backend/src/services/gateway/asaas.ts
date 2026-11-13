@@ -14,6 +14,7 @@ import {
  */
 export class AsaasGateway implements GatewayPort {
   readonly provider = 'ASAAS' as const;
+  readonly supportsBoletoAndCard = true;
   private readonly baseUrl: string;
 
   constructor(private readonly apiKey: string) {
@@ -60,12 +61,13 @@ export class AsaasGateway implements GatewayPort {
 
   async createPixCharge(input: CreatePixChargeInput): Promise<CreatePixChargeResult> {
     const customerId = await this.ensureCustomer(input.client);
+    const billingType = input.billingType ?? 'PIX';
 
     const payment = await this.request<{ id: string; invoiceUrl?: string }>('/payments', {
       method: 'POST',
       body: JSON.stringify({
         customer: customerId,
-        billingType: 'PIX',
+        billingType,
         value: Number((input.amountCents / 100).toFixed(2)),
         dueDate: input.dueDate,
         description: input.description,
@@ -75,6 +77,16 @@ export class AsaasGateway implements GatewayPort {
 
     let pixCopyPaste: string | null = null;
     let pixQrCodeUrl: string | null = null;
+    // Boleto / "cliente escolhe": não há copia-e-cola; o pagamento é pelo
+    // link da fatura do Asaas (invoiceUrl).
+    if (billingType !== 'PIX') {
+      return {
+        gatewayChargeId: payment.id,
+        pixCopyPaste,
+        pixQrCodeUrl,
+        invoiceUrl: payment.invoiceUrl ?? null
+      };
+    }
     try {
       const qr = await this.request<{ payload?: string; encodedImage?: string }>(
         `/payments/${payment.id}/pixQrCode`

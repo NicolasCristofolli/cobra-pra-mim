@@ -2,7 +2,18 @@
 
 import { Suspense, useCallback, useEffect, useState, type FormEvent } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { CheckCircle2, Pencil, Plus, ScrollText, Search, StickyNote, Trash2, Users } from 'lucide-react';
+import {
+  CheckCircle2,
+  Pencil,
+  Plus,
+  ScrollText,
+  Search,
+  StickyNote,
+  Trash2,
+  Upload,
+  Users
+} from 'lucide-react';
+import { ClientImportModal } from '@/components/client-import';
 import { useToast } from '@/components/toast';
 import {
   Avatar,
@@ -112,6 +123,7 @@ function ClientesContent() {
     );
   }
 
+  const [importOpen, setImportOpen] = useState(false);
   const [deleting, setDeleting] = useState<Client | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
 
@@ -257,9 +269,14 @@ function ClientesContent() {
     <div className="space-y-[18px]">
       <header className="flex flex-wrap items-center justify-between gap-4">
         <h1 className="text-[19px] font-bold tracking-tight text-sand-900">Clientes</h1>
-        <Button size="sm" onClick={openCreate}>
-          <Plus className="h-4 w-4" /> Novo cliente
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button size="sm" variant="outline" onClick={() => setImportOpen(true)}>
+            <Upload className="h-4 w-4" /> Importar planilha
+          </Button>
+          <Button size="sm" onClick={openCreate}>
+            <Plus className="h-4 w-4" /> Novo cliente
+          </Button>
+        </div>
       </header>
 
       <div className="flex flex-wrap items-center gap-2.5">
@@ -300,9 +317,14 @@ function ClientesContent() {
             }
             action={
               query || statusFilter ? undefined : (
-                <Button onClick={openCreate}>
-                  <Plus className="h-4 w-4" /> Cadastrar cliente
-                </Button>
+                <div className="flex flex-wrap justify-center gap-2">
+                  <Button onClick={openCreate}>
+                    <Plus className="h-4 w-4" /> Cadastrar cliente
+                  </Button>
+                  <Button variant="outline" onClick={() => setImportOpen(true)}>
+                    <Upload className="h-4 w-4" /> Importar planilha
+                  </Button>
+                </div>
               )
             }
           />
@@ -515,6 +537,14 @@ function ClientesContent() {
           </Button>
         </div>
       </Modal>
+
+      <ClientImportModal
+        open={importOpen}
+        onClose={() => setImportOpen(false)}
+        onImported={() => {
+          load(query).catch((error) => push('error', (error as Error).message));
+        }}
+      />
 
       <ConfirmDialog
         open={deleting !== null}

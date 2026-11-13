@@ -90,8 +90,10 @@ Um backup que fica só na VPS some junto com ela. Faça as duas coisas:
   não responde, se a última execução do motor de cobrança falhou ou se ele não
   roda há mais de 26h. Aponte um monitor externo (UptimeRobot, Better Stack,
   etc.) para esta URL, checando a cada 5 minutos, com alerta por e-mail/celular.
-- Se o ciclo diário terminar com erro, os administradores (`role = 'ADMIN'`)
-  recebem um e-mail na hora. O histórico fica na tabela `engine_runs`.
+- O motor roda de hora em hora e atende cada conta uma vez por dia, a partir
+  do horário que ela escolheu em Mensagens. Se um ciclo terminar com erro, os
+  administradores (`role = 'ADMIN'`) recebem um e-mail na hora. O histórico
+  fica na tabela `engine_runs` e aparece no painel `/admin`.
 - Quando o WhatsApp de um usuário desconecta, o dono da conta recebe um e-mail
   e o painel mostra o alerta até a reconexão.
 

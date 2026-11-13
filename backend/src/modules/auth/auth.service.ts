@@ -33,14 +33,14 @@ export const hashPassword = (password: string) => bcrypt.hash(password, BCRYPT_C
  */
 export async function createAccount(
   tx: PoolClient,
-  input: { name: string; email: string; passwordHash: string; role?: Role }
+  input: { name: string; email: string; passwordHash: string; role?: Role; termsAccepted?: boolean }
 ): Promise<AccountRow> {
   const inserted = await tx.query<AccountRow>(
     // Admin é criado pelo script do servidor: o e-mail já nasce confirmado.
-    `INSERT INTO users (name, email, password_hash, role, email_verified_at)
-     VALUES ($1, $2, $3, $4, CASE WHEN $4 = 'ADMIN' THEN now() END)
+    `INSERT INTO users (name, email, password_hash, role, email_verified_at, terms_accepted_at)
+     VALUES ($1, $2, $3, $4, CASE WHEN $4 = 'ADMIN' THEN now() END, CASE WHEN $5 THEN now() END)
      RETURNING id, name, email, password_hash, token_version, role`,
-    [input.name, input.email, input.passwordHash, input.role ?? 'USER']
+    [input.name, input.email, input.passwordHash, input.role ?? 'USER', input.termsAccepted === true]
   );
   const created = inserted.rows[0]!;
   await tx.query(

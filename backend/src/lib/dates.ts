@@ -95,6 +95,16 @@ export function todayISO(timeZone: string = env.appTz): string {
   return new Intl.DateTimeFormat('en-CA', { timeZone }).format(new Date());
 }
 
+/** Hora atual (0–23) no fuso do app. */
+export function currentHour(timeZone: string = env.appTz, now: Date = new Date()): number {
+  const text = new Intl.DateTimeFormat('en-GB', {
+    timeZone,
+    hour: '2-digit',
+    hourCycle: 'h23'
+  }).format(now);
+  return Number(text) % 24;
+}
+
 export function formatDateBR(isoDate: string): string {
   const { y, m, d } = parseISODate(isoDate);
   const pad = (n: number) => String(n).padStart(2, '0');

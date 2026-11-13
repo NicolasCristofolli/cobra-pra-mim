@@ -58,6 +58,22 @@ export const DEFAULT_CHARGE_TEMPLATE = [
   'Qualquer dúvida, é só responder por aqui. 🙂'
 ].join('\n');
 
+/**
+ * Mesma cobrança, para faturas sem Pix copia e cola (boleto, ou o cliente
+ * escolhe a forma de pagamento): em vez do código, vai o link de pagamento.
+ * Usado no lugar do modelo padrão quando o usuário não personalizou o texto.
+ */
+export const DEFAULT_CHARGE_LINK_TEMPLATE = [
+  'Olá, {nome_cliente}! 👋',
+  '',
+  'Sua fatura de {valor} ({descricao}) vence em {data_vencimento}.',
+  '',
+  'Pague pelo link abaixo:',
+  '{link_pix}',
+  '',
+  'Qualquer dúvida, é só responder por aqui. 🙂'
+].join('\n');
+
 export const DEFAULT_PAID_TEMPLATE =
   '{nome_cliente}, recebemos seu pagamento de {valor}. ✅ Obrigado!';
 

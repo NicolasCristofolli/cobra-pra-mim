@@ -9,7 +9,8 @@ export interface DeepHealth {
   problems: string[];
 }
 
-// O ciclo roda 1x por dia: 26h sem execução significa que um dia foi pulado.
+// O ciclo roda de hora em hora; 26h sem nenhuma execução significa que um dia
+// inteiro de envios foi perdido (margem larga para não gerar alarme falso).
 const STALE_CYCLE_HOURS = 26;
 
 /**

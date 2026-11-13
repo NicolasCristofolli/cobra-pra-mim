@@ -12,9 +12,11 @@ import {
   MessageSquareText,
   ScrollText,
   Settings,
+  ShieldCheck,
   Users
 } from 'lucide-react';
 import { api } from '@/lib/api';
+import { useUser } from './user-context';
 import { cx } from './ui';
 
 // Ícones só aparecem na barra mobile; no desktop o design usa o "dot".
@@ -58,6 +60,7 @@ function NavItem({
 export function Sidebar() {
   const pathname = usePathname();
   const router = useRouter();
+  const isAdmin = useUser().role === 'ADMIN';
 
   async function logout() {
     try {
@@ -102,6 +105,13 @@ export function Sidebar() {
             active={pathname.startsWith('/configuracoes')}
           />
           <NavItem href="/planos" label="Assinatura" active={pathname.startsWith('/planos')} />
+          {isAdmin && (
+            <NavItem
+              href="/admin"
+              label="Administração"
+              active={pathname.startsWith('/admin')}
+            />
+          )}
         </div>
       </aside>
 
@@ -115,7 +125,8 @@ export function Sidebar() {
             ...NAV,
             { href: '/tutorial', label: 'Tutorial de configuração', icon: BookOpen },
             { href: '/configuracoes', label: 'Configurações', icon: Settings },
-            { href: '/planos', label: 'Assinatura', icon: CreditCard }
+            { href: '/planos', label: 'Assinatura', icon: CreditCard },
+            ...(isAdmin ? [{ href: '/admin', label: 'Administração', icon: ShieldCheck }] : [])
           ].map(
             ({ href, label, icon: Icon }) => {
               const active = pathname.startsWith(href);

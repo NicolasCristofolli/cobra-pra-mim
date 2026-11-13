@@ -56,6 +56,8 @@ export interface User {
   id: string;
   name: string;
   email: string;
+  /** ADMIN vê o menu de administração (a autorização real é do backend). */
+  role: 'USER' | 'ADMIN';
   emailVerified: boolean;
   access: Access;
   subscription: Subscription | null;
@@ -82,6 +84,8 @@ export interface Client {
 // SENT = mensagem de cobrança já enviada no WhatsApp, aguardando pagamento.
 export type ChargeStatus = 'PENDING' | 'SENT' | 'PAID' | 'OVERDUE' | 'CANCELED';
 export type Recurrence = 'NONE' | 'WEEKLY' | 'MONTHLY' | 'YEARLY';
+/** PIX, BOLETO ou UNDEFINED (o cliente escolhe Pix, boleto ou cartão no gateway). */
+export type BillingType = 'PIX' | 'BOLETO' | 'UNDEFINED';
 
 export interface Charge {
   id: string;
@@ -97,6 +101,7 @@ export interface Charge {
   recurrence: Recurrence;
   /** Último vencimento que a série recorrente pode gerar (null = sem limite). */
   recurrenceEndDate: string | null;
+  billingType: BillingType;
   seriesId: string;
   pixCopyPaste: string | null;
   pixQrCodeUrl: string | null;
@@ -160,6 +165,14 @@ export interface Settings {
   reminderDaysAfter: number[];
   /** Teto de mensagens automáticas por dia (proteção do número). */
   dailyMessageLimit: number;
+  /** Hora do dia (6–20) em que as mensagens automáticas desta conta saem. */
+  sendHour: number;
+  /** true = não envia em sábados, domingos e feriados nacionais. */
+  skipNonBusinessDays: boolean;
+  /** Resumo mensal por e-mail. */
+  monthlyReportEnabled: boolean;
+  /** true = o gateway configurado aceita boleto e cartão (hoje, só o Asaas). */
+  boletoAvailable: boolean;
   /** Resultado do cadastro automático do webhook no gateway (só ao salvar a chave). */
   webhookAutoConfig: { status: 'configured' } | { status: 'failed'; error: string } | null;
 }
@@ -173,9 +186,82 @@ export interface PublicCharge {
   dueDate: string;
   status: 'PENDING' | 'PAID' | 'OVERDUE' | 'CANCELED';
   paidAt: string | null;
+  billingType: BillingType;
   pixCopyPaste: string | null;
   pixQrCodeUrl: string | null;
   invoiceUrl: string | null;
+}
+
+/** Primeiros passos (GET /dashboard/onboarding). */
+export interface Onboarding {
+  steps: { whatsapp: boolean; gateway: boolean; client: boolean; charge: boolean; sent: boolean };
+  done: number;
+  total: number;
+  completed: boolean;
+  dismissed: boolean;
+}
+
+/** Resultado da importação de clientes (POST /clients/import). */
+export interface ImportResult {
+  created: number;
+  rejected: Array<{ line: number; name: string; reason: string }>;
+}
+
+/** Planos exibidos na página inicial (GET /public/plans). */
+export interface PublicPlans {
+  trialDays: number;
+  plans: Plan[];
+}
+
+/** Painel do administrador (GET /admin/overview). */
+export interface AdminAccount {
+  id: string;
+  name: string;
+  email: string;
+  role: 'USER' | 'ADMIN';
+  createdAt: string;
+  emailVerified: boolean;
+  access: Access;
+  subscriptionStatus: SubscriptionStatus | null;
+  planName: string | null;
+  trialEndsAt: string | null;
+  currentPeriodEnd: string | null;
+  whatsappConfigured: boolean;
+  whatsappDisconnected: boolean;
+  gatewayProvider: string | null;
+  clients: number;
+  charges: number;
+  failedSends24h: number;
+  lastSentAt: string | null;
+}
+
+export interface AdminOverview {
+  summary: {
+    accounts: number;
+    paying: number;
+    trial: number;
+    pastDue: number;
+    blocked: number;
+    unverified: number;
+    trialEndingSoon: number;
+    whatsappDisconnected: number;
+    failedSends24h: number;
+    mrrCents: number;
+  };
+  engine: {
+    lastRunAt: string | null;
+    lastRunOk: boolean | null;
+    recent: Array<{
+      ranOn: string;
+      ok: boolean;
+      finishedAt: string;
+      notified: number;
+      notifyFailed: number;
+      generated: number;
+      error: string | null;
+    }>;
+  };
+  accounts: AdminAccount[];
 }
 
 /** Estado da conexão do WhatsApp (GET /whatsapp/status). */

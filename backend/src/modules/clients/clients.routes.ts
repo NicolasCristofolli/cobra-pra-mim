@@ -55,6 +55,26 @@ function rethrowDuplicate(error: unknown): never {
 
 const idParam = z.object({ id: z.string().uuid() });
 
+/** Máximo de linhas por importação (uma planilha maior é enviada em partes). */
+export const IMPORT_MAX_ROWS = 500;
+
+// Cada linha chega como texto cru da planilha; a validação de verdade é a
+// mesma do cadastro manual (clientSchema), aplicada linha a linha.
+const importSchema = z.object({
+  rows: z
+    .array(
+      z.object({
+        name: z.string().max(300).optional().default(''),
+        phone: z.string().max(60).optional().default(''),
+        email: z.string().max(300).nullish(),
+        document: z.string().max(60).optional().default(''),
+        notes: z.string().max(2000).nullish()
+      })
+    )
+    .min(1, 'A planilha não tem nenhuma linha de cliente')
+    .max(IMPORT_MAX_ROWS, `Importe no máximo ${IMPORT_MAX_ROWS} clientes por vez`)
+});
+
 export type ClientStatus = 'INADIMPLENTE' | 'ADIMPLENTE' | 'SEM_COBRANCAS';
 
 interface ClientRow {
@@ -156,6 +176,58 @@ router.post(
       [req.userId, data.name, data.phone, data.email ?? null, data.document ?? null, data.notes ?? null, data.whatsappOptOut]
     ).catch(rethrowDuplicate);
     res.status(201).json(serialize(row!));
+  })
+);
+
+/**
+ * Importação de planilha (CSV lido no navegador). Cada linha é independente:
+ * as válidas entram, as inválidas ou duplicadas voltam na lista de recusadas
+ * com o número da linha e o motivo — nada de "tudo ou nada", para um erro de
+ * digitação não travar a carteira inteira.
+ */
+router.post(
+  '/import',
+  asyncHandler(async (req, res) => {
+    const { rows } = importSchema.parse(req.body);
+    const rejected: Array<{ line: number; name: string; reason: string }> = [];
+    let created = 0;
+
+    for (let index = 0; index < rows.length; index++) {
+      const raw = rows[index]!;
+      // Linha 1 da planilha é o cabeçalho; os dados começam na 2.
+      const line = index + 2;
+      const parsed = clientSchema.safeParse({
+        name: raw.name,
+        phone: raw.phone,
+        email: raw.email?.trim() ? raw.email : null,
+        document: raw.document,
+        notes: raw.notes?.trim() ? raw.notes : null
+      });
+      if (!parsed.success) {
+        rejected.push({
+          line,
+          name: raw.name.trim().slice(0, 80),
+          reason: [...new Set(parsed.error.issues.map((issue) => issue.message))].join(' · ')
+        });
+        continue;
+      }
+      const data = parsed.data;
+      try {
+        await query(
+          `INSERT INTO clients (user_id, name, phone, email, document, notes)
+           VALUES ($1, $2, $3, $4, $5, $6)`,
+          [req.userId, data.name, data.phone, data.email ?? null, data.document, data.notes ?? null]
+        );
+        created++;
+      } catch (error) {
+        const constraint = (error as { constraint?: string }).constraint;
+        const reason = constraint ? DUPLICATE_FIELD_MESSAGE[constraint] : undefined;
+        if (!reason) throw error;
+        rejected.push({ line, name: data.name.slice(0, 80), reason });
+      }
+    }
+
+    res.json({ created, rejected });
   })
 );
 

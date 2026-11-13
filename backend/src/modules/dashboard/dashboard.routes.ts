@@ -240,6 +240,61 @@ router.get(
   })
 );
 
+/**
+ * Primeiros passos: o que falta para a conta cobrar sozinha. Calculado do
+ * estado real (nada de flags que podem ficar desatualizadas).
+ */
+router.get(
+  '/onboarding',
+  asyncHandler(async (req, res) => {
+    const row = await queryOne<{
+      whatsapp: boolean;
+      gateway: boolean;
+      client: boolean;
+      charge: boolean;
+      sent: boolean;
+      dismissed: boolean;
+    }>(
+      `SELECT
+         COALESCE((SELECT whatsapp_provider IS NOT NULL AND whatsapp_disconnected_at IS NULL
+                     FROM settings WHERE user_id = $1), FALSE) AS whatsapp,
+         COALESCE((SELECT gateway_provider IS NOT NULL AND gateway_api_key_enc IS NOT NULL
+                     FROM settings WHERE user_id = $1), FALSE) AS gateway,
+         EXISTS (SELECT 1 FROM clients WHERE user_id = $1 AND deleted_at IS NULL) AS client,
+         EXISTS (SELECT 1 FROM charges WHERE user_id = $1) AS charge,
+         EXISTS (SELECT 1 FROM notification_logs WHERE user_id = $1 AND success) AS sent,
+         (SELECT onboarding_dismissed_at IS NOT NULL FROM users WHERE id = $1) AS dismissed`,
+      [req.userId]
+    );
+    const steps = {
+      whatsapp: row?.whatsapp === true,
+      gateway: row?.gateway === true,
+      client: row?.client === true,
+      charge: row?.charge === true,
+      sent: row?.sent === true
+    };
+    const done = Object.values(steps).filter(Boolean).length;
+    res.json({
+      steps,
+      done,
+      total: Object.keys(steps).length,
+      completed: done === Object.keys(steps).length,
+      dismissed: row?.dismissed === true
+    });
+  })
+);
+
+router.post(
+  '/onboarding/dismiss',
+  asyncHandler(async (req, res) => {
+    await query(
+      'UPDATE users SET onboarding_dismissed_at = COALESCE(onboarding_dismissed_at, now()) WHERE id = $1',
+      [req.userId]
+    );
+    res.json({ ok: true });
+  })
+);
+
 /** Server-Sent Events: o webhook publica "payment" e o dashboard recarrega. */
 router.get('/events', (req, res) => {
   res.writeHead(200, {

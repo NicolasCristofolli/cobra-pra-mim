@@ -1,9 +1,12 @@
 import { query, queryOne } from '../db';
 import { env } from '../config/env';
+import { isBusinessDay } from '../lib/business-days';
 import { nextDueDate, parseISODate, todayISO } from '../lib/dates';
 import { normalizePhone } from '../lib/format';
 import {
   buildChargeVars,
+  DEFAULT_CHARGE_LINK_TEMPLATE,
+  DEFAULT_CHARGE_TEMPLATE,
   DEFAULT_OVERDUE_TEMPLATE,
   DEFAULT_REMINDER_TEMPLATE,
   renderTemplate
@@ -33,7 +36,25 @@ export interface CycleReport {
   blockedSkipped: number; // faturas de usuários com assinatura bloqueada (não enviadas)
   limitSkipped: number;   // não enviadas porque o usuário atingiu o limite diário do chip
   disconnectedSkipped: number; // não enviadas porque o WhatsApp do usuário está desconectado
+  calendarSkipped: number; // não enviadas: a conta não envia em fim de semana/feriado
 }
+
+export interface CycleOptions {
+  /**
+   * Hora atual (0–23, fuso do app). Informada pelo agendador, que roda de hora
+   * em hora: cada conta é atendida UMA vez por dia, a partir da hora que ela
+   * escolheu (settings.send_hour). Ausente (testes, execução manual) = atende
+   * todas as contas agora, sem controle de horário.
+   */
+  hour?: number;
+}
+
+/**
+ * Última hora do dia em que o agendador ainda envia mensagens. Uma conta que
+ * não pôde ser atendida no horário dela (WhatsApp desconectado, por exemplo)
+ * é tentada de novo a cada hora, mas nunca de madrugada.
+ */
+export const LAST_SEND_HOUR = 21;
 
 /**
  * Que mensagem a fatura recebe hoje:
@@ -49,6 +70,11 @@ const NOTIFY_CONCURRENCY = 5;
 
 let stopRequested = false;
 let runningCycle: Promise<unknown> | null = null;
+
+/** true enquanto um ciclo está em andamento (o agendador não sobrepõe ciclos). */
+export function isBillingCycleRunning(): boolean {
+  return runningCycle !== null;
+}
 
 /**
  * Pede para o ciclo em andamento parar no próximo ponto seguro (entre dois
@@ -143,6 +169,8 @@ async function ensurePix(
   // Fatura já vencida: os gateways recusam Pix com vencimento no passado,
   // então o Pix nasce vencendo hoje (a fatura continua com a data original).
   const result = await gateway.createPixCharge({
+    // Boleto / "cliente escolhe" só onde o gateway oferece; senão, Pix.
+    billingType: gateway.supportsBoletoAndCard ? charge.billing_type : 'PIX',
     amountCents: charge.amount_cents,
     dueDate: charge.due_date < today ? today : charge.due_date,
     description: charge.description,
@@ -214,8 +242,8 @@ async function spawnRecurringCharges(today: string): Promise<number> {
       const inserted = await queryOne<ChargeRow>(
         `INSERT INTO charges
            (user_id, client_id, series_id, description, amount_cents, due_date,
-            recurrence, anchor_day, recurrence_end_date)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            recurrence, anchor_day, recurrence_end_date, billing_type)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
          ON CONFLICT (series_id, due_date) DO NOTHING
          RETURNING *`,
         [
@@ -227,7 +255,8 @@ async function spawnRecurringCharges(today: string): Promise<number> {
           nextDue,
           current.recurrence,
           current.anchor_day,
-          current.recurrence_end_date
+          current.recurrence_end_date,
+          current.billing_type
         ]
       );
 
@@ -273,12 +302,18 @@ async function markOverdue(today: string): Promise<number> {
  * Cada lembrete da régua sai uma única vez (charge_reminders). Clientes
  * excluídos ou que pediram para não receber mensagens ficam de fora.
  */
-async function findChargesToNotify(today: string): Promise<NotifiableRow[]> {
+async function findChargesToNotify(
+  today: string,
+  /** null = todas as contas; lista = só as contas que estão na hora de envio. */
+  userIds: string[] | null
+): Promise<NotifiableRow[]> {
+  if (userIds !== null && userIds.length === 0) return [];
   return query<NotifiableRow>(
     `${NOTIFIABLE_SELECT}
        LEFT JOIN settings s ON s.user_id = ch.user_id
       WHERE cl.deleted_at IS NULL
         AND cl.whatsapp_opt_out = FALSE
+        AND ($2::uuid[] IS NULL OR ch.user_id = ANY ($2::uuid[]))
         AND (
               ( ch.last_notified_at IS NULL
                 AND ( (ch.status = 'PENDING' AND ch.due_date = $1::date)
@@ -299,8 +334,39 @@ async function findChargesToNotify(today: string): Promise<NotifiableRow[]> {
                     ) )
             )
       ORDER BY ch.user_id, ch.due_date`,
-    [today]
+    [today, userIds]
   );
+}
+
+/**
+ * Contas que o agendador atende nesta hora: já chegou a hora de envio
+ * escolhida e a conta ainda não foi atendida hoje.
+ */
+async function findUsersDue(today: string, hour: number): Promise<string[]> {
+  if (hour > LAST_SEND_HOUR) return [];
+  const rows = await query<{ user_id: string }>(
+    `SELECT s.user_id FROM settings s
+      WHERE s.send_hour <= $2
+        AND NOT EXISTS (
+              SELECT 1 FROM engine_user_runs r
+               WHERE r.user_id = s.user_id AND r.ran_on = $1::date
+            )`,
+    [today, hour]
+  );
+  return rows.map((row) => row.user_id);
+}
+
+async function markUserDone(userId: string, today: string): Promise<void> {
+  await query(
+    `INSERT INTO engine_user_runs (user_id, ran_on) VALUES ($1, $2::date)
+     ON CONFLICT (user_id, ran_on) DO NOTHING`,
+    [userId, today]
+  );
+  // Histórico curto: só o dia corrente importa para a decisão.
+  await query(`DELETE FROM engine_user_runs WHERE user_id = $1 AND ran_on < $2::date - 30`, [
+    userId,
+    today
+  ]);
 }
 
 interface SendOutcome {
@@ -311,9 +377,15 @@ interface SendOutcome {
   reason?: string;
 }
 
-function templateFor(settings: SettingsRow, stage: NotifyStage): string {
+function templateFor(settings: SettingsRow, stage: NotifyStage, hasPixCode: boolean): string {
   if (stage === 'REMINDER') return settings.reminder_template ?? DEFAULT_REMINDER_TEMPLATE;
   if (stage === 'OVERDUE_REMINDER') return settings.overdue_template ?? DEFAULT_OVERDUE_TEMPLATE;
+  // Boleto / "cliente escolhe": {link_pix} vira o link de pagamento. Quem usa
+  // o texto padrão (que fala em "Pix copia e cola") recebe a versão com link;
+  // texto personalizado é respeitado como está.
+  if (!hasPixCode && settings.message_template === DEFAULT_CHARGE_TEMPLATE) {
+    return DEFAULT_CHARGE_LINK_TEMPLATE;
+  }
   return settings.message_template;
 }
 
@@ -367,7 +439,7 @@ async function sendChargeMessage(
   }
 
   const message = renderTemplate(
-    templateFor(settings, stage),
+    templateFor(settings, stage, Boolean(pixFields.pix_copy_paste) || !pixFields.invoice_url),
     buildChargeVars({
       clientName: charge.client_name,
       amountCents: charge.amount_cents,
@@ -488,14 +560,16 @@ async function countSentToday(userId: string, today: string): Promise<number> {
 }
 
 /**
- * Ciclo diário completo do motor de cobrança. Chamado pelo CRON (08:00 no
- * fuso APP_TZ por padrão) e reutilizado tal-e-qual pelos testes.
+ * Ciclo completo do motor de cobrança. Chamado pelo CRON de hora em hora
+ * (fuso APP_TZ), com a hora atual em options.hour, e reutilizado
+ * tal-e-qual pelos testes.
  */
 export function runBillingCycle(
   deps: AppDeps,
-  today: string = todayISO()
+  today: string = todayISO(),
+  options: CycleOptions = {}
 ): Promise<CycleReport> {
-  const cycle = runCycle(deps, today);
+  const cycle = runCycle(deps, today, options);
   runningCycle = cycle;
   const clear = () => {
     if (runningCycle === cycle) runningCycle = null;
@@ -504,7 +578,12 @@ export function runBillingCycle(
   return cycle;
 }
 
-async function runCycle(deps: AppDeps, today: string): Promise<CycleReport> {
+async function runCycle(
+  deps: AppDeps,
+  today: string,
+  options: CycleOptions
+): Promise<CycleReport> {
+  const scheduled = options.hour !== undefined;
   const report: CycleReport = {
     today,
     generated: 0,
@@ -514,14 +593,18 @@ async function runCycle(deps: AppDeps, today: string): Promise<CycleReport> {
     usersSkipped: 0,
     blockedSkipped: 0,
     limitSkipped: 0,
-    disconnectedSkipped: 0
+    disconnectedSkipped: 0,
+    calendarSkipped: 0
   };
 
   report.generated = await spawnRecurringCharges(today);
   report.overdueMarked = await markOverdue(today);
   await checkWhatsappConnections(deps);
 
-  const toNotify = await findChargesToNotify(today);
+  const toNotify = await findChargesToNotify(
+    today,
+    scheduled ? await findUsersDue(today, options.hour!) : null
+  );
 
   // Cada usuário tem o próprio chip (instância da Evolution), então as filas
   // rodam em paralelo entre usuários (até NOTIFY_CONCURRENCY por vez) e em
@@ -553,6 +636,12 @@ async function runCycle(deps: AppDeps, today: string): Promise<CycleReport> {
       report.disconnectedSkipped += charges.length;
       return;
     }
+    // Conta que não envia em fim de semana/feriado: a cobrança do vencimento
+    // fica pendente e sai no próximo dia útil (como atrasada nunca avisada).
+    if (settings.skip_non_business_days && !isBusinessDay(today)) {
+      report.calendarSkipped += charges.length;
+      return;
+    }
 
     // Proteção do chip: teto de mensagens automáticas por dia. Volume alto
     // e repentino é o principal gatilho de banimento do número.
@@ -569,7 +658,7 @@ async function runCycle(deps: AppDeps, today: string): Promise<CycleReport> {
       if (stopRequested) return;
       if (sentToday >= settings.daily_message_limit) {
         report.limitSkipped += charges.length - index;
-        return;
+        break;
       }
       if (deps.interSendDelay && attemptedBefore) await deps.interSendDelay();
       if (stopRequested) return;
@@ -583,6 +672,10 @@ async function runCycle(deps: AppDeps, today: string): Promise<CycleReport> {
         report.notifyFailed++;
       }
     }
+    // Conta atendida hoje (mesmo com falhas ou limite atingido: o que sobrou
+    // sai amanhã, como sempre foi). Interrupção por desligamento não chega
+    // aqui, então a conta é retomada no próximo ciclo.
+    if (scheduled) await markUserDone(userId, today);
   };
 
   const queues = [...byUser.entries()];

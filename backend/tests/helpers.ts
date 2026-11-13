@@ -118,6 +118,8 @@ export interface TestHarness {
   gatewayCancels: string[];
   /** Faz o próximo sendText falhar uma vez (simula instabilidade). */
   failNextSend: () => void;
+  /** Faz o próximo e-mail falhar uma vez (simula SMTP fora do ar). */
+  failNextEmail: () => void;
   /** Webhooks cadastrados no gateway fake (registro automático). */
   webhookRegistrations: RegisterWebhookInput[];
   /** Simula o chip conectado/desconectado (padrão: conectado). */
@@ -136,11 +138,16 @@ export function buildTestApp(
   const webhookRegistrations: RegisterWebhookInput[] = [];
   let whatsappConnected = true;
   let failOnce = false;
+  let failEmailOnce = false;
   let pixCounter = 0;
 
   const deps: AppDeps = {
     mailer: {
       async send(message) {
+        if (failEmailOnce) {
+          failEmailOnce = false;
+          throw new Error('SMTP fora do ar (simulado)');
+        }
         sentEmails.push(message);
       }
     },
@@ -175,6 +182,7 @@ export function buildTestApp(
         ? null
         : {
             provider: 'ASAAS',
+            supportsBoletoAndCard: true,
             async createPixCharge(
               input: CreatePixChargeInput
             ): Promise<CreatePixChargeResult> {
@@ -182,7 +190,11 @@ export function buildTestApp(
               pixCounter++;
               return {
                 gatewayChargeId: `fake_pay_${pixCounter}`,
-                pixCopyPaste: `00020126FAKEPIX${pixCounter}5204000053039865802BR`,
+                // Como no Asaas: boleto / "cliente escolhe" não têm copia e cola.
+                pixCopyPaste:
+                  (input.billingType ?? 'PIX') === 'PIX'
+                    ? `00020126FAKEPIX${pixCounter}5204000053039865802BR`
+                    : null,
                 pixQrCodeUrl: null,
                 invoiceUrl: `https://fake.gateway/inv/${pixCounter}`
               };
@@ -226,6 +238,9 @@ export function buildTestApp(
     },
     failNextSend: () => {
       failOnce = true;
+    },
+    failNextEmail: () => {
+      failEmailOnce = true;
     }
   };
 }

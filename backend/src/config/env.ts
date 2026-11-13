@@ -91,8 +91,11 @@ export const env = {
   get platformCheckoutSuccessUrl() {
     return process.env.PLATFORM_CHECKOUT_SUCCESS_URL || null;
   },
-  get cronSchedule() {
-    return process.env.CRON_SCHEDULE ?? '0 8 * * *';
+  // O motor roda de hora em hora e atende cada conta uma vez por dia, a
+  // partir da hora que ela escolheu (Mensagens > Envio). A antiga
+  // CRON_SCHEDULE (um horário só para todos) não é mais usada.
+  get engineTickSchedule() {
+    return process.env.ENGINE_TICK_SCHEDULE ?? '0 * * * *';
   },
   get cronDisabled() {
     return process.env.DISABLE_CRON === 'true' || this.nodeEnv === 'test';

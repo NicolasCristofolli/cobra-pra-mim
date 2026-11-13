@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 
 /**
  * Proteção de rotas (roda no servidor a cada navegação):
+ *  0. página inicial (/)            -> pública; quem já está logado vai para o painel
  *  1. sem cookie de sessão          -> /login
  *  2. sessão inválida/expirada       -> apaga o cookie e manda para /login
  *  3. e-mail não confirmado         -> /confirmar-email
@@ -24,7 +25,16 @@ const ACCESS_TIMEOUT_MS = 2_500;
  * Páginas abertas sem login: recuperação de senha e confirmação de e-mail
  * (o link do e-mail pode ser aberto em outro aparelho, sem sessão).
  */
-const PUBLIC_PAGES = ['/esqueci-senha', '/redefinir-senha', '/confirmar-email'];
+const PUBLIC_PAGES = [
+  '/esqueci-senha',
+  '/redefinir-senha',
+  '/confirmar-email',
+  // Textos legais e arquivos para buscadores.
+  '/termos',
+  '/privacidade',
+  '/robots.txt',
+  '/sitemap.xml'
+];
 
 /** Para onde vai quem ainda não confirmou o e-mail. */
 const VERIFY_PAGE = '/confirmar-email';
@@ -83,6 +93,13 @@ export async function middleware(request: NextRequest) {
   }
 
   const token = request.cookies.get(AUTH_COOKIE)?.value;
+
+  // Página inicial: aberta para visitantes. Quem tem sessão segue para o
+  // painel (se o cookie não valer mais, a navegação do painel resolve).
+  if (pathname === '/') {
+    return token ? redirectTo(request, '/dashboard') : NextResponse.next();
+  }
+
   const isLoginPage = pathname === '/login';
   const isBillingPage = BILLING_PAGES.some((page) => pathname === page || pathname.startsWith(`${page}/`));
 

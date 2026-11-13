@@ -40,17 +40,25 @@ export default function LoginPage() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const [acceptTerms, setAcceptTerms] = useState(false);
 
-  // Volta da redefinição de senha (window.location evita o Suspense do useSearchParams).
+  // Volta da redefinição de senha e link "Testar grátis" da página inicial
+  // (window.location evita o Suspense do useSearchParams).
   useEffect(() => {
-    if (new URLSearchParams(window.location.search).get('senha') === 'redefinida') {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('senha') === 'redefinida') {
       setNotice('Senha alterada. Entre com a nova senha.');
     }
+    if (params.get('modo') === 'cadastro') setMode('register');
   }, []);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
     setError(null);
+    if (mode === 'register' && !acceptTerms) {
+      setError('Para criar a conta, é preciso aceitar os Termos de Uso e a Política de Privacidade.');
+      return;
+    }
     setLoading(true);
     try {
       if (mode === 'login') {
@@ -61,7 +69,7 @@ export default function LoginPage() {
       } else {
         await api('/auth/register', {
           method: 'POST',
-          body: JSON.stringify({ name, email, password })
+          body: JSON.stringify({ name, email, password, acceptTerms: true })
         });
       }
       // Cadastro: primeiro confirma o e-mail, depois escolhe o plano.
@@ -96,11 +104,9 @@ export default function LoginPage() {
           aria-hidden
         />
 
-        <img
-          src="/cobra-logo-on-blue.svg"
-          alt="Cobra pra mim"
-          className="relative z-[1] h-[46px] w-auto self-start"
-        />
+        <Link href="/" className="relative z-[1] self-start" aria-label="Página inicial">
+          <img src="/cobra-logo-on-blue.svg" alt="Cobra pra mim" className="h-[46px] w-auto" />
+        </Link>
 
         <div className="relative z-[1] flex flex-col gap-3.5">
           <h1 className="mb-2 text-[26px] font-bold leading-snug text-white">
@@ -134,11 +140,9 @@ export default function LoginPage() {
       {/* Formulário sobre o creme */}
       <section className="flex flex-1 flex-col items-center justify-center bg-white px-6 py-12">
         <div className="flex w-full max-w-[360px] flex-col gap-[22px]">
-          <img
-            src="/cobra-logo-on-light.svg"
-            alt="Cobra pra mim"
-            className="h-10 w-auto self-start lg:hidden"
-          />
+          <Link href="/" className="self-start lg:hidden" aria-label="Página inicial">
+            <img src="/cobra-logo-on-light.svg" alt="Cobra pra mim" className="h-10 w-auto" />
+          </Link>
 
           <div className="flex flex-col gap-1.5">
             <h2 className="text-2xl font-bold text-sand-900">
@@ -147,7 +151,7 @@ export default function LoginPage() {
             <p className="text-sm leading-relaxed text-sand-600">
               {mode === 'login'
                 ? 'Entre para continuar cobrando com tranquilidade.'
-                : 'Leva menos de um minuto — sem cartão de crédito.'}
+                : 'Leva menos de um minuto. Teste grátis, sem cartão de crédito.'}
             </p>
           </div>
 
@@ -197,6 +201,36 @@ export default function LoginPage() {
               >
                 Esqueci minha senha
               </Link>
+            )}
+
+            {mode === 'register' && (
+              <label className="flex cursor-pointer items-start gap-2.5 text-[13px] leading-snug text-sand-600">
+                <input
+                  type="checkbox"
+                  className="mt-0.5 h-4 w-4 shrink-0 rounded border-sand-300 text-primary-600 focus:ring-leaf-500"
+                  checked={acceptTerms}
+                  onChange={(event) => setAcceptTerms(event.target.checked)}
+                />
+                <span>
+                  Li e aceito os{' '}
+                  <Link
+                    href="/termos"
+                    target="_blank"
+                    className="font-semibold text-primary-600 hover:text-primary-700"
+                  >
+                    Termos de Uso
+                  </Link>{' '}
+                  e a{' '}
+                  <Link
+                    href="/privacidade"
+                    target="_blank"
+                    className="font-semibold text-primary-600 hover:text-primary-700"
+                  >
+                    Política de Privacidade
+                  </Link>
+                  .
+                </span>
+              </label>
             )}
 
             {notice && !error && (

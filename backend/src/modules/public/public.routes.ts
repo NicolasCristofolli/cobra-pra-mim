@@ -4,6 +4,9 @@ import { z } from 'zod';
 import { queryOne } from '../../db';
 import { asyncHandler, notFound } from '../../lib/errors';
 import { ipKey } from '../../middleware/rate-limit';
+import { listActivePlans } from '../../services/subscription/subscription.repo';
+import { serializePlan } from '../billing/billing.serializers';
+import { TRIAL_DAYS } from '../auth/auth.service';
 
 const tokenParam = z.object({ token: z.string().regex(/^[0-9a-f]{32}$/) });
 
@@ -16,6 +19,7 @@ interface PublicChargeRow {
   pix_copy_paste: string | null;
   pix_qr_code_url: string | null;
   invoice_url: string | null;
+  billing_type: 'PIX' | 'BOLETO' | 'UNDEFINED';
   seller_name: string;
   client_name: string | null;
 }
@@ -50,7 +54,7 @@ export default function publicRouter(): Router {
 
       const row = await queryOne<PublicChargeRow>(
         `SELECT ch.description, ch.amount_cents, ch.due_date, ch.status, ch.paid_at,
-                ch.pix_copy_paste, ch.pix_qr_code_url, ch.invoice_url,
+                ch.pix_copy_paste, ch.pix_qr_code_url, ch.invoice_url, ch.billing_type,
                 u.name AS seller_name, cl.name AS client_name
            FROM charges ch
            JOIN users u ON u.id = ch.user_id
@@ -72,11 +76,22 @@ export default function publicRouter(): Router {
         // SENT é detalhe interno: para o cliente a fatura está "em aberto".
         status: row.status === 'SENT' ? 'PENDING' : row.status,
         paidAt: row.paid_at?.toISOString() ?? null,
+        billingType: row.billing_type,
         // Dados de pagamento só enquanto a fatura está em aberto.
         pixCopyPaste: open ? row.pix_copy_paste : null,
         pixQrCodeUrl: open ? row.pix_qr_code_url : null,
         invoiceUrl: open ? row.invoice_url : null
       });
+    })
+  );
+
+  // Planos e dias de teste para a página inicial (dados que já são públicos:
+  // os mesmos preços aparecem na tela de assinatura).
+  router.get(
+    '/plans',
+    asyncHandler(async (_req, res) => {
+      res.setHeader('Cache-Control', 'public, max-age=300');
+      res.json({ trialDays: TRIAL_DAYS, plans: (await listActivePlans()).map(serializePlan) });
     })
   );
 

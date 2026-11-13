@@ -2,7 +2,9 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { queryOne } from '../../db';
 import { asyncHandler, AppError, notFound } from '../../lib/errors';
-import { parseISODate, todayISO } from '../../lib/dates';
+import { env } from '../../config/env';
+import { toCsv } from '../../lib/csv';
+import { addDaysISO, formatDateBR, parseISODate, todayISO } from '../../lib/dates';
 import { publish } from '../../lib/events';
 import { notifyChargeNow, sendPaymentConfirmation } from '../../services/billing-engine';
 import type { AppDeps } from '../../services/deps';
@@ -11,8 +13,10 @@ import {
   cancelCharge,
   createCharge,
   deleteCharge,
+  EXPORT_MAX_ROWS,
   findChargeById,
   listCharges,
+  listChargesForExport,
   markChargePaid,
   reactivateCharge,
   unmarkChargePaid,
@@ -51,7 +55,9 @@ const createSchema = z
     amountCents,
     dueDate: isoDate('Data de vencimento inválida'),
     recurrence: z.enum(['NONE', 'WEEKLY', 'MONTHLY', 'YEARLY']).default('NONE'),
-    recurrenceEndDate: isoDate('Data limite da recorrência inválida').nullish()
+    recurrenceEndDate: isoDate('Data limite da recorrência inválida').nullish(),
+    // PIX (padrão), BOLETO ou UNDEFINED (o cliente escolhe Pix, boleto ou cartão).
+    billingType: z.enum(['PIX', 'BOLETO', 'UNDEFINED']).default('PIX')
   })
   .superRefine((data, ctx) => {
     if (data.dueDate < todayISO()) {
@@ -96,6 +102,65 @@ const listSchema = z.object({
 
 const idParam = z.object({ id: z.string().uuid() });
 
+// Exportação: período de no máximo 2 anos, por vencimento ou por pagamento.
+const exportSchema = z
+  .object({
+    from: isoDate('Data inicial inválida'),
+    to: isoDate('Data final inválida'),
+    by: z.enum(['due', 'paid']).default('due'),
+    status: z.enum(['PENDING', 'SENT', 'PAID', 'OVERDUE', 'CANCELED']).optional()
+  })
+  .superRefine((data, ctx) => {
+    // Data inexistente já foi recusada acima; aqui só compara datas válidas.
+    if (!isRealDate(data.from) || !isRealDate(data.to)) return;
+    if (data.to < data.from) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['to'],
+        message: 'A data final precisa ser igual ou posterior à inicial'
+      });
+    } else if (data.to > addDaysISO(data.from, 731)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['to'],
+        message: 'Exporte no máximo 2 anos por vez'
+      });
+    }
+  });
+
+const STATUS_LABEL: Record<ChargeStatus, string> = {
+  PENDING: 'Em aberto',
+  SENT: 'Enviada',
+  PAID: 'Paga',
+  OVERDUE: 'Vencida',
+  CANCELED: 'Cancelada'
+};
+
+const BILLING_LABEL = { PIX: 'Pix', BOLETO: 'Boleto', UNDEFINED: 'Cliente escolhe' } as const;
+const RECURRENCE_LABEL = { NONE: 'Avulsa', WEEKLY: 'Semanal', MONTHLY: 'Mensal', YEARLY: 'Anual' } as const;
+
+/** CPF/CNPJ com máscara: como texto, o Excel não corta o zero à esquerda. */
+function formatDocument(value: string | null): string {
+  const digits = (value ?? '').replace(/\D/g, '');
+  if (digits.length === 11) return digits.replace(/^(\d{3})(\d{3})(\d{3})(\d{2})$/, '$1.$2.$3-$4');
+  if (digits.length === 14) {
+    return digits.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/, '$1.$2.$3/$4-$5');
+  }
+  return value ?? '';
+}
+
+/** 5551999887766 -> "(51) 99988-7766" (texto: não vira notação científica na planilha). */
+function formatPhone(value: string | null): string {
+  const digits = (value ?? '').replace(/\D/g, '');
+  const local = digits.length > 11 && digits.startsWith('55') ? digits.slice(2) : digits;
+  if (local.length !== 10 && local.length !== 11) return value ?? '';
+  return `(${local.slice(0, 2)}) ${local.slice(2, local.length - 4)}-${local.slice(-4)}`;
+}
+
+/** 12345 -> "123,45" (vírgula decimal: abre como número no Excel em português). */
+const centsToCsv = (cents: number | null): string =>
+  cents === null ? '' : (cents / 100).toFixed(2).replace('.', ',');
+
 export default function chargesRouter(deps: AppDeps): Router {
   const router = Router();
 
@@ -119,6 +184,65 @@ export default function chargesRouter(deps: AppDeps): Router {
     })
   );
 
+  // Relatório em CSV (para planilha ou para o contador). Vem antes das rotas
+  // com :id para "export" nunca ser lido como um id.
+  router.get(
+    '/export',
+    asyncHandler(async (req, res) => {
+      const filters = exportSchema.parse(req.query);
+      const rows = await listChargesForExport({
+        userId: req.userId,
+        from: filters.from,
+        to: filters.to,
+        by: filters.by,
+        status: filters.status as ChargeStatus | undefined,
+        timeZone: env.appTz
+      });
+      if (rows.length > EXPORT_MAX_ROWS) {
+        throw new AppError(
+          `O período tem mais de ${EXPORT_MAX_ROWS.toLocaleString('pt-BR')} faturas. Escolha um intervalo menor.`,
+          422,
+          'EXPORT_TOO_LARGE'
+        );
+      }
+      const csv = toCsv(
+        [
+          'Cliente',
+          'CPF/CNPJ',
+          'Telefone',
+          'Descrição',
+          'Valor',
+          'Vencimento',
+          'Situação',
+          'Pago em',
+          'Valor líquido',
+          'Forma de pagamento',
+          'Recorrência'
+        ],
+        rows.map((row) => [
+          row.client_name ?? '(cliente excluído)',
+          formatDocument(row.client_document),
+          formatPhone(row.client_phone),
+          row.description,
+          centsToCsv(row.amount_cents),
+          formatDateBR(row.due_date),
+          STATUS_LABEL[row.status],
+          row.paid_on ? formatDateBR(row.paid_on) : '',
+          row.status === 'PAID' ? centsToCsv(row.net_amount_cents ?? row.amount_cents) : '',
+          BILLING_LABEL[row.billing_type],
+          RECURRENCE_LABEL[row.recurrence]
+        ])
+      );
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader(
+        'Content-Disposition',
+        `attachment; filename="cobrancas-${filters.from}-a-${filters.to}.csv"`
+      );
+      res.setHeader('Cache-Control', 'no-store');
+      res.send(csv);
+    })
+  );
+
   router.post(
     '/',
     asyncHandler(async (req, res) => {
@@ -134,6 +258,20 @@ export default function chargesRouter(deps: AppDeps): Router {
       );
       if (!client) throw notFound('Cliente não encontrado');
 
+      // Boleto e "cliente escolhe" dependem do gateway: hoje só o Asaas faz.
+      if (data.billingType !== 'PIX') {
+        const settings = await findSettingsByUserId(req.userId);
+        const gateway = settings ? deps.gatewayFactory(settings) : null;
+        if (!gateway?.supportsBoletoAndCard) {
+          throw new AppError(
+            'Boleto e cartão só estão disponíveis com o Asaas configurado em Configurações. ' +
+              'Escolha Pix ou conecte o Asaas.',
+            400,
+            'BILLING_TYPE_UNAVAILABLE'
+          );
+        }
+      }
+
       const charge = await createCharge({
         userId: req.userId,
         clientId: data.clientId,
@@ -141,7 +279,8 @@ export default function chargesRouter(deps: AppDeps): Router {
         amountCents: data.amountCents,
         dueDate: data.dueDate,
         recurrence: data.recurrence,
-        recurrenceEndDate: data.recurrenceEndDate ?? null
+        recurrenceEndDate: data.recurrenceEndDate ?? null,
+        billingType: data.billingType
       });
       res.status(201).json(serializeCharge(charge));
     })

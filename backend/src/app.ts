@@ -7,6 +7,7 @@ import { errorHandler } from './middleware/error-handler';
 import { requireAuth, requireVerifiedEmail } from './middleware/auth';
 import { requireSameOrigin } from './middleware/same-origin';
 import { loadAccess, requireActiveSubscription } from './middleware/subscription';
+import adminRouter from './modules/admin/admin.routes';
 import authRouter from './modules/auth/auth.routes';
 import billingRouter from './modules/billing/billing.routes';
 import platformWebhookRouter from './modules/billing/platform-webhook.routes';
@@ -65,6 +66,9 @@ export function createApp(deps: AppDeps = defaultDeps): Express {
   // (é por aqui que a pessoa escolhe o plano e paga).
   const session = [requireAuth, loadAccess];
   app.use('/billing', session, billingRouter(deps));
+
+  // Painel do administrador da plataforma (role conferido no banco).
+  app.use('/admin', requireAuth, adminRouter());
 
   // Rotas de negócio: sessão válida E assinatura que libere acesso (senão 402).
   const paid = [...session, requireVerifiedEmail, requireActiveSubscription];

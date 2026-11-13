@@ -11,6 +11,7 @@ import {
   EmptyState,
   Field,
   Input,
+  Select,
   Spinner,
   Textarea
 } from '@/components/ui';
@@ -99,6 +100,9 @@ export default function MensagensPage() {
   const [daysBefore, setDaysBefore] = useState('');
   const [daysAfter, setDaysAfter] = useState('');
   const [dailyLimit, setDailyLimit] = useState('150');
+  const [sendHour, setSendHour] = useState(8);
+  const [skipNonBusinessDays, setSkipNonBusinessDays] = useState(false);
+  const [monthlyReportEnabled, setMonthlyReportEnabled] = useState(true);
 
   function hydrate(data: Settings) {
     setSettings(data);
@@ -109,6 +113,9 @@ export default function MensagensPage() {
     setDaysBefore(data.reminderDaysBefore.join(', '));
     setDaysAfter(data.reminderDaysAfter.join(', '));
     setDailyLimit(String(data.dailyMessageLimit));
+    setSendHour(data.sendHour);
+    setSkipNonBusinessDays(data.skipNonBusinessDays);
+    setMonthlyReportEnabled(data.monthlyReportEnabled);
   }
   const [saving, setSaving] = useState(false);
   const [sentLog, setSentLog] = useState<Charge[] | null>(null);
@@ -155,11 +162,14 @@ export default function MensagensPage() {
           overdueTemplate,
           reminderDaysBefore,
           reminderDaysAfter,
-          dailyMessageLimit
+          dailyMessageLimit,
+          sendHour,
+          skipNonBusinessDays,
+          monthlyReportEnabled
         })
       });
       hydrate(updated);
-      push('success', 'Mensagens e régua de cobrança salvas.');
+      push('success', 'Alterações salvas.');
     } catch (error) {
       push('error', (error as Error).message);
     } finally {
@@ -242,6 +252,62 @@ export default function MensagensPage() {
           Faturas pagas ou canceladas saem da régua na hora, e clientes marcados com “Não enviar
           mensagens” nunca recebem.
         </p>
+      </Card>
+
+      {/* Horário de envio, dias úteis e resumo mensal */}
+      <Card className="p-5">
+        <div className="mb-4 flex items-center gap-2.5">
+          <span className="flex h-[30px] w-[30px] items-center justify-center rounded-full bg-primary-50">
+            <Clock className="h-[15px] w-[15px] text-primary-600" />
+          </span>
+          <div>
+            <h2 className="text-[13.5px] font-bold text-sand-900">Envio e relatórios</h2>
+            <p className="text-xs text-sand-500">
+              Quando as mensagens automáticas saem e o que você recebe por e-mail.
+            </p>
+          </div>
+        </div>
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+          <Field
+            label="Horário de envio"
+            hint="As mensagens do dia saem a partir desta hora (horário de Brasília)."
+          >
+            <Select value={sendHour} onChange={(event) => setSendHour(Number(event.target.value))}>
+              {Array.from({ length: 15 }, (_, index) => index + 6).map((hour) => (
+                <option key={hour} value={hour}>
+                  {String(hour).padStart(2, '0')}:00
+                </option>
+              ))}
+            </Select>
+          </Field>
+          <label className="flex cursor-pointer items-start gap-2.5 rounded-xl bg-sand-50 px-3 py-2.5">
+            <input
+              type="checkbox"
+              className="mt-0.5 h-4 w-4 rounded border-sand-300 text-primary-600 focus:ring-leaf-500"
+              checked={skipNonBusinessDays}
+              onChange={(event) => setSkipNonBusinessDays(event.target.checked)}
+            />
+            <span className="text-[13px] leading-snug text-sand-700">
+              <span className="font-semibold text-sand-900">Enviar só em dias úteis</span>
+              <br />
+              Nada sai em sábados, domingos e feriados nacionais. A cobrança que vence nesses dias
+              é enviada no próximo dia útil.
+            </span>
+          </label>
+          <label className="flex cursor-pointer items-start gap-2.5 rounded-xl bg-sand-50 px-3 py-2.5">
+            <input
+              type="checkbox"
+              className="mt-0.5 h-4 w-4 rounded border-sand-300 text-primary-600 focus:ring-leaf-500"
+              checked={monthlyReportEnabled}
+              onChange={(event) => setMonthlyReportEnabled(event.target.checked)}
+            />
+            <span className="text-[13px] leading-snug text-sand-700">
+              <span className="font-semibold text-sand-900">Resumo mensal por e-mail</span>
+              <br />
+              No começo de cada mês, quanto você recebeu no mês anterior e quanto está em atraso.
+            </span>
+          </label>
+        </div>
       </Card>
 
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">

@@ -59,7 +59,7 @@ export default function authRouter(deps: Pick<AppDeps, 'mailer'>): Router {
     '/register',
     limits.register,
     asyncHandler(async (req, res) => {
-      const { name, email, password } = registerSchema.parse(req.body);
+      const { name, email, password, acceptTerms } = registerSchema.parse(req.body);
 
       const existing = await queryOne<{ id: string }>('SELECT id FROM users WHERE email = $1', [email]);
       // Revela que o e-mail existe (necessário para a UX de cadastro), mas o
@@ -69,7 +69,9 @@ export default function authRouter(deps: Pick<AppDeps, 'mailer'>): Router {
       const passwordHash = await hashPassword(password);
       // A conta nasce em teste grátis (TRIAL_DAYS). Depois disso, o acesso só
       // continua com um plano pago, confirmado pelo webhook do Asaas.
-      const user = await withTransaction((tx) => createAccount(tx, { name, email, passwordHash }));
+      const user = await withTransaction((tx) =>
+        createAccount(tx, { name, email, passwordHash, termsAccepted: acceptTerms === true })
+      );
 
       setAuthCookie(res, signToken(user.id, user.token_version));
       res.status(201).json({ ...publicUser(user), emailVerified: false });
@@ -200,14 +202,17 @@ export default function authRouter(deps: Pick<AppDeps, 'mailer'>): Router {
     '/me',
     requireAuth,
     asyncHandler(async (req, res) => {
-      const user = await queryOne<Pick<UserRow, 'id' | 'name' | 'email'>>(
-        'SELECT id, name, email FROM users WHERE id = $1',
+      const user = await queryOne<Pick<UserRow, 'id' | 'name' | 'email' | 'role'>>(
+        'SELECT id, name, email, role FROM users WHERE id = $1',
         [req.userId]
       );
       if (!user) throw unauthorized();
       const subscription = await findSubscriptionByUser(user.id);
       res.json({
         ...publicUser(user),
+        // O painel usa para mostrar o menu de administração; a autorização de
+        // verdade é feita no backend (requireAdmin).
+        role: user.role,
         emailVerified: req.emailVerified,
         access: await findAccessByUser(user.id),
         subscription: serializeSubscription(subscription)

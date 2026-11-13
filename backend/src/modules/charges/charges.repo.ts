@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { query, queryOne } from '../../db';
 import { parseISODate, todayISO, type RecurrenceKind } from '../../lib/dates';
 import { publicInvoiceUrl } from '../../lib/template';
+import type { BillingType } from '../../services/gateway/types';
 
 // SENT = mensagem de cobrança já enviada no WhatsApp, aguardando pagamento.
 export type ChargeStatus = 'PENDING' | 'SENT' | 'PAID' | 'OVERDUE' | 'CANCELED';
@@ -32,6 +33,8 @@ export interface ChargeRow {
   public_token: string;
   /** Dia em que o Pix atual foi gerado (NULL = sem Pix ou anterior a esta coluna). */
   pix_generated_on: string | null;
+  /** Forma de pagamento no gateway (PIX, BOLETO ou UNDEFINED = cliente escolhe). */
+  billing_type: BillingType;
   created_at: string;
   client_name?: string;
   client_phone?: string;
@@ -61,6 +64,7 @@ export function serializeCharge(row: ChargeRow) {
     recurrence: row.recurrence,
     anchorDay: row.anchor_day,
     recurrenceEndDate: row.recurrence_end_date,
+    billingType: row.billing_type,
     paidAt: row.paid_at,
     netAmountCents: row.net_amount_cents,
     gatewayChargeId: row.gateway_charge_id,
@@ -81,6 +85,7 @@ export interface CreateChargeInput {
   dueDate: string;
   recurrence: RecurrenceKind;
   recurrenceEndDate?: string | null;
+  billingType?: BillingType;
 }
 
 /**
@@ -96,8 +101,9 @@ export async function createCharge(input: CreateChargeInput): Promise<ChargeRow>
 
   const row = await queryOne<ChargeRow>(
     `INSERT INTO charges
-       (id, user_id, client_id, series_id, description, amount_cents, due_date, recurrence, anchor_day, recurrence_end_date)
-     VALUES ($1, $2, $3, $1, $4, $5, $6, $7, $8, $9)
+       (id, user_id, client_id, series_id, description, amount_cents, due_date, recurrence, anchor_day,
+        recurrence_end_date, billing_type)
+     VALUES ($1, $2, $3, $1, $4, $5, $6, $7, $8, $9, $10)
      RETURNING *`,
     [
       id,
@@ -108,7 +114,8 @@ export async function createCharge(input: CreateChargeInput): Promise<ChargeRow>
       input.dueDate,
       input.recurrence,
       anchorDay,
-      input.recurrence === 'NONE' ? null : input.recurrenceEndDate ?? null
+      input.recurrence === 'NONE' ? null : input.recurrenceEndDate ?? null,
+      input.billingType ?? 'PIX'
     ]
   );
   return row!;
@@ -399,4 +406,60 @@ export async function listCharges(filters: ListChargesFilters): Promise<{
   );
 
   return { items, total: Number(countRow?.total ?? 0) };
+}
+
+export interface ExportRow {
+  client_name: string | null;
+  client_document: string | null;
+  client_phone: string | null;
+  description: string;
+  amount_cents: number;
+  net_amount_cents: number | null;
+  due_date: string;
+  status: ChargeStatus;
+  paid_on: string | null;
+  billing_type: BillingType;
+  recurrence: RecurrenceKind;
+}
+
+/** Teto de linhas por exportação (um arquivo maior que isso não abre bem em planilha). */
+export const EXPORT_MAX_ROWS = 10_000;
+
+/**
+ * Faturas de um período para exportar em CSV. `by` escolhe a data do filtro:
+ * vencimento (due) ou pagamento (paid, no fuso do app — só faturas pagas).
+ */
+export async function listChargesForExport(filters: {
+  userId: string;
+  from: string;
+  to: string;
+  by: 'due' | 'paid';
+  status?: ChargeStatus;
+  timeZone: string;
+}): Promise<ExportRow[]> {
+  const params: unknown[] = [filters.userId, filters.from, filters.to, filters.timeZone];
+  const conditions = ['ch.user_id = $1'];
+  if (filters.by === 'paid') {
+    conditions.push(`ch.status = 'PAID'`);
+    conditions.push(`(ch.paid_at AT TIME ZONE $4)::date BETWEEN $2::date AND $3::date`);
+  } else {
+    conditions.push(`ch.due_date BETWEEN $2::date AND $3::date`);
+  }
+  if (filters.status) {
+    params.push(filters.status);
+    conditions.push(`ch.status = $${params.length}::charge_status`);
+  }
+  params.push(EXPORT_MAX_ROWS + 1);
+  return query<ExportRow>(
+    `SELECT cl.name AS client_name, cl.document AS client_document, cl.phone AS client_phone,
+            ch.description, ch.amount_cents, ch.net_amount_cents, ch.due_date, ch.status,
+            to_char(ch.paid_at AT TIME ZONE $4, 'YYYY-MM-DD') AS paid_on,
+            ch.billing_type, ch.recurrence
+       FROM charges ch
+       LEFT JOIN clients cl ON cl.id = ch.client_id
+      WHERE ${conditions.join(' AND ')}
+      ORDER BY ${filters.by === 'paid' ? 'ch.paid_at' : 'ch.due_date'}, ch.created_at
+      LIMIT $${params.length}`,
+    params
+  );
 }

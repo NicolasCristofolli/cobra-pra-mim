@@ -179,12 +179,25 @@ function Invoice({
         )}
 
         {open && !charge.pixCopyPaste && charge.invoiceUrl && (
-          <a
-            href={charge.invoiceUrl}
-            className="flex w-full items-center justify-center rounded-xl bg-primary-600 px-4 py-3 text-sm font-bold text-white shadow-sm hover:bg-primary-700"
-          >
-            Pagar agora
-          </a>
+          <div className="space-y-3">
+            <p className="text-center text-[13px] text-sand-600">
+              {charge.billingType === 'BOLETO'
+                ? 'Abra o boleto para pagar no app do seu banco ou copiar o código de barras.'
+                : charge.billingType === 'UNDEFINED'
+                  ? 'Escolha como prefere pagar: Pix, boleto ou cartão.'
+                  : 'Abra a página de pagamento para concluir.'}
+            </p>
+            <a
+              href={charge.invoiceUrl}
+              rel="noopener noreferrer"
+              className="flex w-full items-center justify-center rounded-xl bg-primary-600 px-4 py-3 text-sm font-bold text-white shadow-sm hover:bg-primary-700"
+            >
+              {charge.billingType === 'BOLETO' ? 'Ver boleto' : 'Pagar agora'}
+            </a>
+            <p className="text-center text-xs text-sand-500">
+              Esta página atualiza sozinha quando o pagamento for confirmado.
+            </p>
+          </div>
         )}
 
         {open && !charge.pixCopyPaste && !charge.invoiceUrl && (

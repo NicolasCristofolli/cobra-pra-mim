@@ -13,6 +13,7 @@ import {
   Wallet
 } from 'lucide-react';
 import { CashflowChart, DonutChart, DonutLegendRow } from '@/components/charts';
+import { OnboardingCard } from '@/components/onboarding-card';
 import { useToast } from '@/components/toast';
 import {
   Avatar,
@@ -167,6 +168,8 @@ export default function DashboardPage() {
           <p className="mt-0.5 text-[13px] text-sand-600">Aqui está o resumo do seu negócio.</p>
         </div>
       </header>
+
+      <OnboardingCard />
 
       {metrics.whatsappDisconnected && (
         <div

@@ -32,6 +32,12 @@ export interface SettingsRow {
   overdue_template: string | null;
   daily_message_limit: number;
   whatsapp_disconnected_at: Date | null;
+  /** Hora do dia (6–20, fuso do app) a partir da qual o motor atende a conta. */
+  send_hour: number;
+  /** true = não envia em sábados, domingos e feriados nacionais. */
+  skip_non_business_days: boolean;
+  /** Resumo mensal por e-mail. */
+  monthly_report_enabled: boolean;
 }
 
 export async function findSettingsByUserId(userId: string): Promise<SettingsRow | null> {
@@ -57,7 +63,10 @@ const updateSchema = z.object({
   overdueTemplate: z.string().trim().min(5).max(4000).optional(),
   reminderDaysBefore: reminderDays.optional(),
   reminderDaysAfter: reminderDays.optional(),
-  dailyMessageLimit: z.number().int().min(1).max(1000).optional()
+  dailyMessageLimit: z.number().int().min(1).max(1000).optional(),
+  sendHour: z.number().int().min(6, 'Escolha um horário entre 6h e 20h').max(20, 'Escolha um horário entre 6h e 20h').optional(),
+  skipNonBusinessDays: z.boolean().optional(),
+  monthlyReportEnabled: z.boolean().optional()
 });
 
 /** Resultado da tentativa de cadastrar o webhook no gateway pela API. */
@@ -85,6 +94,11 @@ function serialize(row: SettingsRow, webhookAutoConfig: WebhookAutoConfig = null
     reminderDaysBefore: row.reminder_days_before,
     reminderDaysAfter: row.reminder_days_after,
     dailyMessageLimit: row.daily_message_limit,
+    sendHour: row.send_hour,
+    skipNonBusinessDays: row.skip_non_business_days,
+    monthlyReportEnabled: row.monthly_report_enabled,
+    // true = este gateway aceita boleto e "cliente escolhe" além de Pix.
+    boletoAvailable: row.gateway_provider === 'ASAAS' && Boolean(row.gateway_api_key_enc),
     // Só vem preenchido na resposta de quem acabou de salvar a chave/segredo.
     webhookAutoConfig
   };
@@ -158,6 +172,9 @@ export default function settingsRouter(deps: Pick<AppDeps, 'gatewayFactory'>): R
            reminder_days_before  = $9,
            reminder_days_after   = $10,
            daily_message_limit   = $11,
+           send_hour             = $12,
+           skip_non_business_days = $13,
+           monthly_report_enabled = $14,
            updated_at            = now()
          WHERE user_id = $1
          RETURNING *`,
@@ -172,7 +189,10 @@ export default function settingsRouter(deps: Pick<AppDeps, 'gatewayFactory'>): R
           data.overdueTemplate ?? current.overdue_template,
           data.reminderDaysBefore ?? current.reminder_days_before,
           data.reminderDaysAfter ?? current.reminder_days_after,
-          data.dailyMessageLimit ?? current.daily_message_limit
+          data.dailyMessageLimit ?? current.daily_message_limit,
+          data.sendHour ?? current.send_hour,
+          data.skipNonBusinessDays ?? current.skip_non_business_days,
+          data.monthlyReportEnabled ?? current.monthly_report_enabled
         ]
       );
 

@@ -6,6 +6,7 @@ import {
   Ban,
   CheckCircle2,
   Copy,
+  Download,
   Link2,
   Pencil,
   Plus,
@@ -46,7 +47,26 @@ import {
   formatPhoneBR,
   inputTextToCents
 } from '@/lib/format';
-import type { Charge, ChargeList, ChargeStatus, Client, Recurrence } from '@/lib/types';
+import type {
+  BillingType,
+  Charge,
+  ChargeList,
+  ChargeStatus,
+  Client,
+  Recurrence,
+  Settings
+} from '@/lib/types';
+
+const BILLING_LABEL: Record<BillingType, string> = {
+  PIX: 'Pix',
+  BOLETO: 'Boleto',
+  UNDEFINED: 'Pix, boleto ou cartão'
+};
+
+/** Primeiro dia do mês corrente (YYYY-MM-01), no relógio do navegador. */
+function firstDayOfMonthInput(): string {
+  return `${todayInput().slice(0, 8)}01`;
+}
 
 const PAGE_SIZE = 20;
 
@@ -113,6 +133,17 @@ function CobrancasContent() {
   const [amountCents, setAmountCents] = useState(0);
   const [dueDate, setDueDate] = useState(todayInput());
   const [recurrence, setRecurrence] = useState<Recurrence>('NONE');
+  const [billingType, setBillingType] = useState<BillingType>('PIX');
+  // null = ainda não consultou se o gateway da conta aceita boleto/cartão.
+  const [boletoAvailable, setBoletoAvailable] = useState<boolean | null>(null);
+
+  // Exportação em CSV.
+  const [exportOpen, setExportOpen] = useState(false);
+  const [exportFrom, setExportFrom] = useState(firstDayOfMonthInput());
+  const [exportTo, setExportTo] = useState(todayInput());
+  const [exportBy, setExportBy] = useState<'due' | 'paid'>('due');
+  const [exportError, setExportError] = useState<string | null>(null);
+  const [exporting, setExporting] = useState(false);
   // Data limite: mês/ano (YYYY-MM) nas semanais/mensais, só o ano nas anuais.
   const [endMonth, setEndMonth] = useState('');
   const [endYear, setEndYear] = useState('');
@@ -167,10 +198,17 @@ function CobrancasContent() {
     setAmountCents(0);
     setDueDate(todayInput());
     setRecurrence('NONE');
+    setBillingType('PIX');
     setEndMonth('');
     setEndYear('');
     setFormError(null);
     setModalOpen(true);
+    if (boletoAvailable === null) {
+      // Falhou a consulta: segue só com Pix (o padrão de sempre).
+      api<Settings>('/settings')
+        .then((settings) => setBoletoAvailable(settings.boletoAvailable))
+        .catch(() => setBoletoAvailable(false));
+    }
     let list = clients;
     if (!list) {
       try {
@@ -236,7 +274,8 @@ function CobrancasContent() {
           amountCents,
           dueDate,
           recurrence,
-          recurrenceEndDate
+          recurrenceEndDate,
+          billingType
         })
       });
       push(
@@ -391,15 +430,71 @@ function CobrancasContent() {
     push('success', 'Link da fatura copiado!');
   }
 
+  async function exportCsv(event: FormEvent) {
+    event.preventDefault();
+    if (!exportFrom || !exportTo) {
+      setExportError('Informe o período.');
+      return;
+    }
+    if (exportTo < exportFrom) {
+      setExportError('A data final precisa ser igual ou posterior à inicial.');
+      return;
+    }
+    setExporting(true);
+    setExportError(null);
+    try {
+      const params = new URLSearchParams({ from: exportFrom, to: exportTo, by: exportBy });
+      const response = await fetch(`/api/charges/export?${params.toString()}`);
+      if (!response.ok) {
+        const body = (await response.json().catch(() => ({}))) as {
+          error?: string;
+          issues?: Array<{ message: string }>;
+        };
+        throw new Error(
+          body.issues?.map((issue) => issue.message).join(' · ') ??
+            body.error ??
+            'Não foi possível gerar o arquivo.'
+        );
+      }
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `cobrancas-${exportFrom}-a-${exportTo}.csv`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      setExportOpen(false);
+      push('success', 'Arquivo gerado. Abra no Excel ou no Planilhas Google.');
+    } catch (error) {
+      setExportError((error as Error).message);
+    } finally {
+      setExporting(false);
+    }
+  }
+
   const totalPages = data ? Math.max(1, Math.ceil(data.total / PAGE_SIZE)) : 1;
 
   return (
     <div className="space-y-[18px]">
       <header className="flex flex-wrap items-center justify-between gap-4">
         <h1 className="text-[19px] font-bold tracking-tight text-sand-900">Cobranças</h1>
-        <Button size="sm" onClick={() => openCreate()}>
-          <Plus className="h-4 w-4" /> Nova cobrança
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => {
+              setExportError(null);
+              setExportOpen(true);
+            }}
+          >
+            <Download className="h-4 w-4" /> Exportar
+          </Button>
+          <Button size="sm" onClick={() => openCreate()}>
+            <Plus className="h-4 w-4" /> Nova cobrança
+          </Button>
+        </div>
       </header>
 
       <div className="flex flex-wrap items-center gap-2.5">
@@ -505,6 +600,11 @@ function CobrancasContent() {
                         <p className="truncate text-[13px] font-medium text-sand-700">
                           {charge.description}
                         </p>
+                        {charge.billingType !== 'PIX' && (
+                          <Badge variant="neutral" className="mr-1 mt-1">
+                            {charge.billingType === 'BOLETO' ? 'Boleto' : 'Cliente escolhe'}
+                          </Badge>
+                        )}
                         {charge.recurrence !== 'NONE' && (
                           <Badge variant="brand" className="mt-1">
                             {RECURRENCE_LABEL[charge.recurrence]}
@@ -737,6 +837,28 @@ function CobrancasContent() {
             </Field>
           </div>
           <Field
+            label="Forma de pagamento"
+            hint={
+              boletoAvailable
+                ? billingType === 'PIX'
+                  ? 'O cliente recebe o Pix copia e cola na mensagem.'
+                  : 'O cliente recebe um link de pagamento do Asaas na mensagem.'
+                : 'Boleto e cartão ficam disponíveis com o Asaas conectado em Configurações.'
+            }
+          >
+            <Select
+              value={billingType}
+              onChange={(event) => setBillingType(event.target.value as BillingType)}
+              disabled={!boletoAvailable}
+            >
+              <option value="PIX">{BILLING_LABEL.PIX}</option>
+              {boletoAvailable && <option value="BOLETO">{BILLING_LABEL.BOLETO}</option>}
+              {boletoAvailable && (
+                <option value="UNDEFINED">{BILLING_LABEL.UNDEFINED} (o cliente escolhe)</option>
+              )}
+            </Select>
+          </Field>
+          <Field
             label="Recorrência"
             hint="Nas recorrentes, o próximo ciclo é gerado automaticamente com o mesmo dia-âncora (dia 31 vira 28/29 em fevereiro e volta ao 31 depois)."
           >
@@ -794,6 +916,66 @@ function CobrancasContent() {
             </Button>
             <Button type="submit" loading={saving}>
               Criar cobrança
+            </Button>
+          </div>
+        </form>
+      </Modal>
+
+      <Modal
+        open={exportOpen}
+        onClose={() => setExportOpen(false)}
+        title="Exportar cobranças"
+        subtitle="Arquivo CSV para abrir no Excel ou enviar ao contador."
+      >
+        <form onSubmit={exportCsv} className="space-y-4">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <Field label="De">
+              <Input
+                type="date"
+                value={exportFrom}
+                onChange={(event) => setExportFrom(event.target.value)}
+                required
+              />
+            </Field>
+            <Field label="Até">
+              <Input
+                type="date"
+                value={exportTo}
+                min={exportFrom}
+                onChange={(event) => setExportTo(event.target.value)}
+                required
+              />
+            </Field>
+          </div>
+          <Field
+            label="Considerar a data de"
+            hint={
+              exportBy === 'paid'
+                ? 'Só as faturas pagas no período (o que entrou no caixa).'
+                : 'Todas as faturas que vencem no período, pagas ou não.'
+            }
+          >
+            <Select
+              value={exportBy}
+              onChange={(event) => setExportBy(event.target.value as 'due' | 'paid')}
+            >
+              <option value="due">Vencimento</option>
+              <option value="paid">Pagamento (recebimentos)</option>
+            </Select>
+          </Field>
+
+          {exportError && (
+            <p className="rounded-xl bg-danger-50 px-3 py-2 text-sm text-danger-700 ring-1 ring-inset ring-danger-100">
+              {exportError}
+            </p>
+          )}
+
+          <div className="flex justify-end gap-2 pt-1">
+            <Button type="button" variant="ghost" onClick={() => setExportOpen(false)}>
+              Cancelar
+            </Button>
+            <Button type="submit" loading={exporting}>
+              <Download className="h-4 w-4" /> Baixar arquivo
             </Button>
           </div>
         </form>
